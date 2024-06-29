@@ -1,5 +1,7 @@
 package info_structure
 
+import "github.com/prashantgupta17/nlpromql/prometheus"
+
 // MetricMap represents a map of metric tokens to metric names.
 type MetricMap struct {
 	Map      map[string][]string `json:"map"`
@@ -20,3 +22,15 @@ type LabelValueMap map[string]map[string]struct{} // Nested map: label -> value 
 
 // NlpToMetricMap represents a map of natural language queries to relevant metric-label pairs.
 type NlpToMetricMap map[string]string // Map: natural language query -> metric-label pair
+
+// QueryInterface defines the operations for querying metrics and labels.
+type QueryEngine interface {
+	// allMetrics returns a list of all metric names.
+	AllMetrics() ([]string, error)
+
+	// allLabels returns a list of all label names.
+	AllLabels() ([]string, error)
+
+	// instantQuery performs a query at a single point in time and returns the result.
+	CustomQuery(query string) ([]prometheus.Metric, error)
+}

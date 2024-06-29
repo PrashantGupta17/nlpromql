@@ -47,7 +47,9 @@ func main() {
 	promClient := prometheus.NewPrometheusConnect(promURL, promUser, promPassword)
 
 	// 4. Build Information Structure
-	metricMap, labelMap, metricLabelMap, labelValueMap, nlpToMetricMap, err := info_structure.BuildInformationStructure(promClient, openaiClient)
+	metricMap, labelMap, metricLabelMap,
+		labelValueMap,
+		nlpToMetricMap, err := info_structure.BuildInformationStructure(promClient, openaiClient)
 	if err != nil {
 		fmt.Println("Error building information structure:", err)
 		os.Exit(1)

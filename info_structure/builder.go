@@ -5,11 +5,10 @@ import (
 	"strings"
 
 	"github.com/prashantgupta17/nlpromql/openai"
-	"github.com/prashantgupta17/nlpromql/prometheus"
 )
 
 // BuildInformationStructure builds or updates the information structure from Prometheus data.
-func BuildInformationStructure(promClient *prometheus.PrometheusConnect, openaiClient *openai.OpenAIClient) (MetricMap, LabelMap, MetricLabelMap, LabelValueMap, NlpToMetricMap, error) {
+func BuildInformationStructure(queryEngine QueryEngine, openaiClient *openai.OpenAIClient) (MetricMap, LabelMap, MetricLabelMap, LabelValueMap, NlpToMetricMap, error) {
 	// Load existing information structure (if it exists)
 	metricMap, labelMap, metricLabelMap, labelValueMap, nlpToMetricMap, err := LoadInformationStructure()
 	if err != nil {
@@ -18,7 +17,7 @@ func BuildInformationStructure(promClient *prometheus.PrometheusConnect, openaiC
 	fmt.Println("Metric Map:", len(metricMap.AllNames))
 
 	// Fetch all metric names from Prometheus
-	allMetricNames, err := promClient.AllMetrics()
+	allMetricNames, err := queryEngine.AllMetrics()
 	if err != nil {
 		return MetricMap{}, LabelMap{}, nil, nil, nil, fmt.Errorf("error fetching all metric names: %v", err)
 	}
@@ -30,7 +29,7 @@ func BuildInformationStructure(promClient *prometheus.PrometheusConnect, openaiC
 	}
 
 	// Fetch all label names from Prometheus
-	allLabelNames, err := promClient.AllLabels()
+	allLabelNames, err := queryEngine.AllLabels()
 	if err != nil {
 		return MetricMap{}, LabelMap{}, nil, nil, nil, fmt.Errorf("error fetching all metric names: %v", err)
 	}
@@ -42,7 +41,7 @@ func BuildInformationStructure(promClient *prometheus.PrometheusConnect, openaiC
 	}
 
 	// Batch query Prometheus for metric and label details
-	err = updateMetricLabelMapAndLabelValueMap(promClient, metricLabelMap, labelValueMap, allMetricNames)
+	err = updateMetricLabelMapAndLabelValueMap(queryEngine, metricLabelMap, labelValueMap, allMetricNames)
 	if err != nil {
 		return MetricMap{}, LabelMap{}, nil, nil, nil, fmt.Errorf("error updating metric-label and label-value maps: %v", err)
 	}
@@ -118,7 +117,7 @@ func updateLabelMap(openaiClient *openai.OpenAIClient, labelMap *LabelMap, allLa
 }
 
 // updateMetricLabelMapAndLabelValueMap updates the metricLabelMap and labelValueMap from Prometheus data.
-func updateMetricLabelMapAndLabelValueMap(promClient *prometheus.PrometheusConnect, metricLabelMap MetricLabelMap, labelValueMap LabelValueMap, allMetricNames []string) error {
+func updateMetricLabelMapAndLabelValueMap(queryEngine QueryEngine, metricLabelMap MetricLabelMap, labelValueMap LabelValueMap, allMetricNames []string) error {
 	metricsToQuery := make([]string, 0) // Use a slice instead of a list
 	for _, metric := range allMetricNames {
 		if _, exists := metricLabelMap[metric]; !exists {
@@ -146,7 +145,7 @@ func updateMetricLabelMapAndLabelValueMap(promClient *prometheus.PrometheusConne
 		}
 
 		query := fmt.Sprintf("{__name__=~\"%s\", __aggregation__!=\"None\"}", metricNameRegex) // Use double quotes around regex
-		result, err := promClient.CustomQuery(query)
+		result, err := queryEngine.CustomQuery(query)
 		if err != nil {
 			return fmt.Errorf("error executing PromQL query: %v", err)
 		}
