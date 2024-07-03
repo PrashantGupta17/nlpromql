@@ -14,7 +14,7 @@ func BuildInformationStructure(queryEngine QueryEngine, openaiClient *openai.Ope
 	if err != nil {
 		return MetricMap{}, LabelMap{}, nil, nil, nil, err
 	}
-	fmt.Println("Metric Map:", len(metricMap.AllNames))
+	fmt.Println("Metric Map struct:", len(metricMap.AllNames))
 
 	// Fetch all metric names from Prometheus
 	allMetricNames, err := queryEngine.AllMetrics()
