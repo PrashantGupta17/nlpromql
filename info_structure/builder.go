@@ -41,7 +41,7 @@ func BuildInformationStructure(queryEngine QueryEngine, openaiClient *openai.Ope
 	}
 
 	// Batch query Prometheus for metric and label details
-	err = updateMetricLabelMapAndLabelValueMap(queryEngine, metricLabelMap, labelValueMap, allMetricNames)
+	err = updateMetricLabelMapAndLabelValueMap(queryEngine, &metricLabelMap, &labelValueMap, allMetricNames)
 	if err != nil {
 		return MetricMap{}, LabelMap{}, nil, nil, nil, fmt.Errorf("error updating metric-label and label-value maps: %v", err)
 	}
@@ -117,10 +117,11 @@ func updateLabelMap(openaiClient *openai.OpenAIClient, labelMap *LabelMap, allLa
 }
 
 // updateMetricLabelMapAndLabelValueMap updates the metricLabelMap and labelValueMap from Prometheus data.
-func updateMetricLabelMapAndLabelValueMap(queryEngine QueryEngine, metricLabelMap MetricLabelMap, labelValueMap LabelValueMap, allMetricNames []string) error {
+func updateMetricLabelMapAndLabelValueMap(queryEngine QueryEngine, metricLabelMap *MetricLabelMap,
+	labelValueMap *LabelValueMap, allMetricNames []string) error {
 	metricsToQuery := make([]string, 0) // Use a slice instead of a list
 	for _, metric := range allMetricNames {
-		if _, exists := metricLabelMap[metric]; !exists {
+		if _, exists := (*metricLabelMap)[metric]; !exists {
 			metricsToQuery = append(metricsToQuery, metric)
 		}
 	}
@@ -152,21 +153,21 @@ func updateMetricLabelMapAndLabelValueMap(queryEngine QueryEngine, metricLabelMa
 
 		for _, item := range result {
 			metricName := item.Metric["__name__"]
-			if _, exists := metricLabelMap[metricName]; !exists {
-				metricLabelMap[metricName] = make(map[string]map[string]struct{})
+			if _, exists := (*metricLabelMap)[metricName]; !exists {
+				(*metricLabelMap)[metricName] = make(map[string]map[string]struct{})
 			}
 
 			for label, value := range item.Metric {
 				if label != "__name__" {
-					if _, exists := metricLabelMap[metricName][label]; !exists {
-						metricLabelMap[metricName][label] = make(map[string]struct{})
+					if _, exists := (*metricLabelMap)[metricName][label]; !exists {
+						(*metricLabelMap)[metricName][label] = make(map[string]struct{})
 					}
-					metricLabelMap[metricName][label][value] = struct{}{}
+					(*metricLabelMap)[metricName][label][value] = struct{}{}
 
-					if _, exists := labelValueMap[label]; !exists {
-						labelValueMap[label] = make(map[string]struct{})
+					if _, exists := (*labelValueMap)[label]; !exists {
+						(*labelValueMap)[label] = make(map[string]struct{})
 					}
-					labelValueMap[label][value] = struct{}{}
+					(*labelValueMap)[label][value] = struct{}{}
 				}
 			}
 		}
