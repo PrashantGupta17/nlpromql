@@ -58,10 +58,17 @@ func BuildInformationStructure(queryEngine QueryEngine, openaiClient *openai.Ope
 func updateMetricMap(openaiClient *openai.OpenAIClient, metricMap *MetricMap, allMetricNames []string) error {
 	newMetricNames := make([]string, 0) // Using a slice for newMetricNames
 	for _, metric := range allMetricNames {
+		found := false
+		fmt.Println("Metric:", metric)
 		for _, existingMetric := range metricMap.AllNames {
 			if existingMetric == metric {
-				continue
+				fmt.Println("Metric:", metric)
+				found = true
+				break
 			}
+		}
+		if !found {
+			newMetricNames = append(newMetricNames, metric)
 		}
 	}
 	fmt.Println("New metrics:")
@@ -89,10 +96,17 @@ func updateMetricMap(openaiClient *openai.OpenAIClient, metricMap *MetricMap, al
 func updateLabelMap(openaiClient *openai.OpenAIClient, labelMap *LabelMap, allLabelNames []string) error {
 	newLabelNames := make([]string, 0)    // Using a slice for newLabelNames
 	for _, label := range allLabelNames { // Assuming you have getLabels() function in prometheus package
+		found := false
+		fmt.Println("Label:", label)
 		for _, existingLabel := range labelMap.AllNames {
 			if existingLabel == label {
-				continue
+				fmt.Println("Label:", label)
+				found = true
+				break
 			}
+		}
+		if !found {
+			newLabelNames = append(newLabelNames, label)
 		}
 	}
 	fmt.Println("New labels:")
