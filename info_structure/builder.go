@@ -14,7 +14,7 @@ func BuildInformationStructure(queryEngine QueryEngine, openaiClient *openai.Ope
 	if err != nil {
 		return MetricMap{}, LabelMap{}, nil, nil, nil, err
 	}
-	fmt.Println("Metric Map struct:", len(metricMap.AllNames))
+	fmt.Println("Metric Map:", len(metricMap.AllNames))
 
 	// Fetch all metric names from Prometheus
 	allMetricNames, err := queryEngine.AllMetrics()
@@ -80,7 +80,9 @@ func updateMetricMap(openaiClient *openai.OpenAIClient, metricMap *MetricMap, al
 		if err != nil {
 			return fmt.Errorf("error getting metric synonyms: %w", err)
 		}
-
+		if metricMap.Map == nil {
+			metricMap.Map = make(map[string][]string)
+		}
 		// Populate metric_map (only for new metrics)
 		for metric, synonyms := range newMetricSynonyms {
 			for _, token := range append([]string{strings.ToLower(metric)}, synonyms...) {
@@ -118,7 +120,9 @@ func updateLabelMap(openaiClient *openai.OpenAIClient, labelMap *LabelMap, allLa
 		if err != nil {
 			return fmt.Errorf("error getting label synonyms: %w", err)
 		}
-
+		if labelMap.Map == nil {
+			labelMap.Map = make(map[string][]string)
+		}
 		// Populate label_map (only for new labels)
 		for label, synonyms := range newLabelSynonyms {
 			for _, token := range append([]string{strings.ToLower(label)}, synonyms...) {
