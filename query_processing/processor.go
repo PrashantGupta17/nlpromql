@@ -20,44 +20,69 @@ func processUserQuery3(client *openai.OpenAIClient, userQuery string) (map[strin
 // processUserQuery processes the user query using the information structure.
 func ProcessUserQuery(client *openai.OpenAIClient, userQuery string, metricMap info_structure.MetricMap, labelMap info_structure.LabelMap,
 	metricLabelMap info_structure.MetricLabelMap, labelValueMap info_structure.LabelValueMap,
-	nlpToMetricMap info_structure.NlpToMetricMap) (map[string]interface{}, map[string]interface{}, map[string]interface{}, map[string]interface{}, error) {
+	nlpToMetricMap info_structure.NlpToMetricMap) (map[string]interface{}, openai.RelevantMetricsMap, openai.RelevantLabelsMap, map[string]interface{}, error) {
 
 	possibleMatches, err := processUserQuery3(client, userQuery)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 	fmt.Println("Possible Matches:", possibleMatches)
-	relevantMetrics := make(map[string]interface{})
-	relevantLabels := make(map[string]interface{})
+	relevantMetrics := make(openai.RelevantMetricsMap)
+	relevantLabels := make(openai.RelevantLabelsMap)
 	relevantHistory := make(map[string]interface{})
 
 	// Process possible metric names (logic similar to your Python code)
 	for _, metricToken := range possibleMatches["possible_metric_names"].([]interface{}) {
 		metricTokenStr := metricToken.(string)
 		if metricNames, exists := metricMap.Map[metricTokenStr]; exists {
-			metricName := metricNames[0]
-			relevantMetrics[metricName] = map[string]interface{}{
-				"match_score": 1, // Start with a score of 1
-				"labels":      make(map[string]interface{}),
-			}
+			for metricName := range metricNames {
+				// Extract the MetricInfo struct from the map
+				metricInfo, exists := relevantMetrics[metricName]
+				if !exists {
+					// If it doesn't exist, initialize it
+					metricInfo = openai.RelevantMetricInfo{
+						MatchScore: 1, // Start with a score of 1
+						Labels:     make(map[string]openai.RelevantLabelInfo),
+					}
+					relevantMetrics[metricName] = metricInfo
+				} else {
+					// If it exists, increment the MatchScore
+					metricInfo.MatchScore++
+					relevantMetrics[metricName] = metricInfo
+					continue
+				}
 
-			// Process possible label names for this metric
-			for _, labelToken := range possibleMatches["possible_label_names"].([]interface{}) {
-				labelTokenStr := labelToken.(string)
-				if labelNames, exists := labelMap.Map[labelTokenStr]; exists {
-					for _, labelName := range labelNames {
-						if labelValues, exists := metricLabelMap[metricName][labelName]; exists {
-							labelValuesSlice := make([]string, 0, len(labelValues))
-							for val := range labelValues {
-								labelValuesSlice = append(labelValuesSlice, val)
+				// Process possible label names for this metric
+				for _, labelToken := range possibleMatches["possible_label_names"].([]interface{}) {
+					labelTokenStr := labelToken.(string)
+					if labelNames, exists := labelMap.Map[labelTokenStr]; exists {
+						for labelName := range labelNames {
+							labelInfo, exists := relevantMetrics[metricName].Labels[labelName]
+							if !exists {
+								// If it doesn't exist, initialize it
+								labelInfo = openai.RelevantLabelInfo{
+									MatchScore: 1, // Start with a score of 1
+									Values:     make(map[string]interface{}),
+								}
+							} else {
+								// If it exists, increment the MatchScore
+								labelInfo.MatchScore++
+								relevantMetrics[metricName].Labels[labelName] = labelInfo
+								continue
 							}
-							if len(labelValuesSlice) > 5 {
-								labelValuesSlice = labelValuesSlice[:5]
+							if labelValues, exists := metricLabelMap[metricName].Labels[labelName]; exists {
+								labelValuesSlice := make([]string, 0, len(labelValues.Values))
+								for val := range labelValues.Values {
+									labelValuesSlice = append(labelValuesSlice, val)
+								}
+								if len(labelValuesSlice) > 5 {
+									labelValuesSlice = labelValuesSlice[:5]
+								}
+								for _, value := range labelValuesSlice {
+									labelInfo.Values[value] = nil
+								}
 							}
-							relevantMetrics[metricName].(map[string]interface{})["labels"].(map[string]interface{})[labelName] = map[string]interface{}{
-								"match_score": 1,                // Start with a score of 1
-								"values":      labelValuesSlice, // Limit to 5 values
-							}
+							relevantMetrics[metricName].Labels[labelName] = labelInfo
 						}
 					}
 				}
@@ -68,24 +93,35 @@ func ProcessUserQuery(client *openai.OpenAIClient, userQuery string, metricMap i
 	// Process possible label names (logic similar to your Python code)
 	for _, labelToken := range possibleMatches["possible_label_names"].([]interface{}) {
 		labelTokenStr := labelToken.(string)
-		for _, actualLabelName := range labelMap.Map[labelTokenStr] {
-			relevantLabels[actualLabelName] = map[string]interface{}{
-				"match_score": 1, // Start with a score of 1
+		for actualLabelName := range labelMap.Map[labelTokenStr] {
+			relevantLabelInfo, exists := relevantLabels[actualLabelName]
+			if !exists {
+				// Initialize the LabelInfo struct
+				relevantLabelInfo = openai.RelevantLabelInfo{
+					MatchScore: 1, // Start with a score of 1
+					Values:     make(map[string]interface{}),
+				}
+			} else {
+				// If it exists, increment the MatchScore
+				relevantLabelInfo.MatchScore++
+				relevantLabels[actualLabelName] = relevantLabelInfo
+				continue
 			}
 
-			if values, exists := labelValueMap[actualLabelName]; exists {
+			if labelInfo, exists := labelValueMap[actualLabelName]; exists {
 				// Ensure values is a slice of strings before slicing
-				valuesSlice := make([]string, 0, len(values))
-				for val := range values {
+				valuesSlice := make([]string, 0, len(labelInfo.Values))
+				for val := range labelInfo.Values {
 					valuesSlice = append(valuesSlice, val)
 				}
 				if len(valuesSlice) > 5 {
 					valuesSlice = valuesSlice[:5]
 				}
-				relevantLabels[actualLabelName].(map[string]interface{})["values"] = valuesSlice
-			} else {
-				relevantLabels[actualLabelName].(map[string]interface{})["values"] = []string{}
+				for _, value := range valuesSlice {
+					relevantLabelInfo.Values[value] = nil
+				}
 			}
+			relevantLabels[actualLabelName] = relevantLabelInfo
 		}
 	}
 
@@ -107,6 +143,9 @@ func ProcessUserQuery(client *openai.OpenAIClient, userQuery string, metricMap i
 			}
 		}
 	}
+	fmt.Println("Relevant Metrics:", relevantMetrics)
+	fmt.Println("Relevant Labels:", relevantLabels)
+	fmt.Println("Relevant History:", relevantHistory)
 	return possibleMatches, relevantMetrics, relevantLabels, relevantHistory, nil
 }
 

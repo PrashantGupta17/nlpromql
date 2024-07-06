@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/prashantgupta17/nlpromql/config"
 	"github.com/prashantgupta17/nlpromql/info_structure"
 	"github.com/prashantgupta17/nlpromql/openai"
 	"github.com/prashantgupta17/nlpromql/prometheus"
@@ -21,14 +20,6 @@ func main() {
 
 	flag.Parse()
 
-	// 1. Load Configuration and Prompts
-	_, _, _, _, err := config.LoadPrompts() // Load prompts to ensure they are available
-	if err != nil {
-		fmt.Println("Error loading prompts:", err)
-		os.Exit(1)
-	}
-
-	// 2. Initialize OpenAI Client
 	openaiClient, err := openai.NewOpenAIClient()
 	if err != nil {
 		fmt.Println("Error initializing OpenAI client:", err)
@@ -42,26 +33,26 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 3. Initialize Prometheus Client
 	// (You'll need to fill in the actual Prometheus URL, username, and password)
 	promClient := prometheus.NewPrometheusConnect(promURL, promUser, promPassword)
 
-	// 4. Build Information Structure
-	metricMap, labelMap, metricLabelMap,
-		labelValueMap,
-		nlpToMetricMap, err := info_structure.BuildInformationStructure(promClient, openaiClient)
+	infoBuilder, err := info_structure.NewInfoBuilder(promClient, openaiClient, nil)
+	if err != nil {
+		fmt.Println("Error getting info builder:", err)
+		os.Exit(1)
+	}
+
+	err = infoBuilder.BuildInformationStructure()
 	if err != nil {
 		fmt.Println("Error building information structure:", err)
 		os.Exit(1)
 	}
-
-	// 5. Print the Result (Optional)
 	fmt.Println("Information Structure Built Successfully:")
-	fmt.Println("Metric Map:", len(metricMap.AllNames))
-	fmt.Println("Metric Map:", len(labelMap.AllNames))
-	fmt.Println("Metric Map:", len(metricLabelMap))
-	fmt.Println("Metric Map:", len(labelValueMap))
-	fmt.Println("Metric Map:", len(nlpToMetricMap))
+	fmt.Println("Metric Map:", len(infoBuilder.MetricMap.AllNames))
+	fmt.Println("Metric Map:", len(infoBuilder.LabelMap.AllNames))
+	fmt.Println("Metric Map:", len(*infoBuilder.MetricLabelMap))
+	fmt.Println("Metric Map:", len(*infoBuilder.LabelValueMap))
+	fmt.Println("Metric Map:", len(*infoBuilder.NlpToMetricMap))
 
 	// 6. Main Loop for User Queries
 	// Chat mode is disabled for now
@@ -71,14 +62,24 @@ func main() {
 	case "server":
 		promqlServer := server.NewPromQLServer(
 			openaiClient,
-			metricMap, labelMap, metricLabelMap, labelValueMap, nlpToMetricMap,
+			*infoBuilder.MetricMap,
+			*infoBuilder.LabelMap,
+			*infoBuilder.MetricLabelMap,
+			*infoBuilder.LabelValueMap,
+			*infoBuilder.NlpToMetricMap,
 		)
 		if err := promqlServer.Start(*port); err != nil {
 			fmt.Println("Server error:", err)
 			os.Exit(1)
 		}
 	case "chat":
-		runChatMode(openaiClient, metricMap, labelMap, metricLabelMap, labelValueMap, nlpToMetricMap)
+		runChatMode(openaiClient,
+			*infoBuilder.MetricMap,
+			*infoBuilder.LabelMap,
+			*infoBuilder.MetricLabelMap,
+			*infoBuilder.LabelValueMap,
+			*infoBuilder.NlpToMetricMap,
+		)
 	default:
 		fmt.Println("Invalid mode. Use 'server' or 'chat'.")
 		os.Exit(1)

@@ -4,13 +4,32 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 
-	"github.com/prashantgupta17/nlpromql/config"
+	"github.com/prashantgupta17/nlpromql/prompts"
 
 	openai "github.com/sashabaranov/go-openai"
 )
+
+// MetricInfo holds information about a metric, including its labels.
+type RelevantMetricInfo struct {
+	MatchScore int                          `json:"match_score"`
+	Labels     map[string]RelevantLabelInfo `json:"labels"`
+}
+
+// LabelInfo holds information about a label, including its values.
+type RelevantLabelInfo struct {
+	MatchScore int                    `json:"match_score"`
+	Values     map[string]interface{} `json:"values"`
+}
+
+// MetricLabelMap represents a map of metric names to their labels and values (sets).
+type RelevantMetricsMap map[string]RelevantMetricInfo // Nested map: metric -> label -> value set
+
+// LabelValueMap represents a map of label names to their values (sets).
+type RelevantLabelsMap map[string]RelevantLabelInfo // Nested map: label -> value set
 
 type OpenAIClient struct {
 	client              *openai.Client
@@ -26,29 +45,29 @@ func NewOpenAIClient() (*OpenAIClient, error) {
 		return nil, fmt.Errorf("OPENAI_API_KEY environment variable not set")
 	}
 
-	// Load prompts from configuration
-	llmSystemPrompt, processQueryPrompt, metricSynonymPrompt, labelSynonymPrompt, err := config.LoadPrompts() // Load other prompts as needed
-	if err != nil {
-		return nil, fmt.Errorf("error loading prompts: %v", err)
-	}
-	fmt.Println("Promts: ")
-	fmt.Println(metricSynonymPrompt)
 	return &OpenAIClient{
 		client:              openai.NewClient(apiKey),
-		llmSystemPrompt:     llmSystemPrompt,
-		processQueryPrompt:  processQueryPrompt,
-		metricSynonymPrompt: metricSynonymPrompt,
-		labelSynonymPrompt:  labelSynonymPrompt,
+		llmSystemPrompt:     prompts.SystemPrompt,
+		processQueryPrompt:  prompts.ProcessQueryPrompt,
+		metricSynonymPrompt: prompts.MetricSynonymPrompt,
+		labelSynonymPrompt:  prompts.LabelSynonymPrompt,
 	}, nil
 }
 
 // getMetricSynonyms fetches metric synonyms using the OpenAI API.
-func (c *OpenAIClient) GetMetricSynonyms(metricNames []string) (map[string][]string, error) {
-	batchSize := 30
+func (c *OpenAIClient) GetMetricSynonyms(metricMap map[string]string) (map[string][]string, error) {
+	batchSize := 20
 	allSynonyms := make(map[string][]string)
-
-	for i := 0; i < len(metricNames); i += batchSize {
-		batch := metricNames[i : i+batchSize]
+	keys := make([]string, 0, len(metricMap))
+	for k := range metricMap {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for i := 0; i < len(keys); i += batchSize {
+		batch := make(map[string]string)
+		for j := i; j < i+batchSize && j < len(keys); j++ {
+			batch[keys[j]] = metricMap[keys[j]]
+		}
 		fmt.Println(batch)
 		batchJson, err := json.MarshalIndent(batch, "", "  ")
 		if err != nil {
@@ -61,7 +80,7 @@ func (c *OpenAIClient) GetMetricSynonyms(metricNames []string) (map[string][]str
 				Model:       openai.GPT3Dot5TurboInstruct,
 				Prompt:      fmt.Sprintf(c.metricSynonymPrompt, string(batchJson)), // Notice the use of a pointer to the prompt string
 				Temperature: 0.3,
-				MaxTokens:   1000,
+				MaxTokens:   2000,
 			},
 		)
 
@@ -87,11 +106,11 @@ func (c *OpenAIClient) GetMetricSynonyms(metricNames []string) (map[string][]str
 
 // getLabelSynonyms fetches label synonyms using the OpenAI API.
 func (c *OpenAIClient) GetLabelSynonyms(labelNames []string) (map[string][]string, error) {
-	batchSize := 30 // Adjust batch size as needed
+	batchSize := 20 // Adjust batch size as needed
 	allSynonyms := make(map[string][]string)
 
 	for i := 0; i < len(labelNames); i += batchSize {
-		batch := labelNames[i : i+batchSize]
+		batch := labelNames[i:int(math.Min(float64(i+batchSize), float64(len(labelNames))))]
 		fmt.Println(batch)
 		batchJson, err := json.MarshalIndent(batch, "", "  ")
 		if err != nil {
@@ -103,7 +122,7 @@ func (c *OpenAIClient) GetLabelSynonyms(labelNames []string) (map[string][]strin
 				Model:       openai.GPT3Dot5TurboInstruct,                         // Or the appropriate model
 				Prompt:      fmt.Sprintf(c.labelSynonymPrompt, string(batchJson)), // Use your label synonym prompt
 				Temperature: 0.5,                                                  // Adjust as needed
-				MaxTokens:   1000,
+				MaxTokens:   2000,
 			},
 		)
 
@@ -155,28 +174,34 @@ func (c *OpenAIClient) ProcessUserQuery(userQuery string) (map[string]interface{
 }
 
 // getPromQLFromLLM generates PromQL queries based on user input and context.
-func (c *OpenAIClient) GetPromQLFromLLM(userQuery string, relevantMetrics map[string]interface{},
-	relevantLabels map[string]interface{}, relevantHistory map[string]interface{}) ([]string, error) {
+func (c *OpenAIClient) GetPromQLFromLLM(userQuery string, relevantMetrics RelevantMetricsMap,
+	relevantLabels RelevantLabelsMap, relevantHistory map[string]interface{}) ([]string, error) {
 	// Prepare input data for LLM
-	llmInputData := map[string]interface{}{
-		"metric_to_label":  relevantMetrics,
-		"label_to_value":   relevantLabels,
-		"relevant_history": relevantHistory,
-	}
 
-	llmInputJSON, err := json.Marshal(llmInputData)
-	if err != nil {
-		return nil, fmt.Errorf("error marshaling LLM input data: %v", err)
-	}
-
+	prompt := fmt.Sprintf("#Relevant Metrics:\n%s\n\n#Relevant Labels:\n%s\n\n#Relevant History:\n%s\n\n#User Query:\n%s",
+		func() string {
+			relevantMetricsJSON, _ := json.MarshalIndent(relevantMetrics, "", "  ")
+			return string(relevantMetricsJSON)
+		}(),
+		func() string {
+			relevantLabelsJSON, _ := json.MarshalIndent(relevantLabels, "", "  ")
+			return string(relevantLabelsJSON)
+		}(),
+		func() string {
+			relevantHistoryJSON, _ := json.MarshalIndent(relevantHistory, "", "  ")
+			return string(relevantHistoryJSON)
+		}(),
+		userQuery,
+	)
+	fmt.Println("Prompt:", prompt)
 	// Send data to LLM for PromQL generation
 	resp, err := c.client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
 			Model: openai.GPT3Dot5Turbo,
 			Messages: []openai.ChatCompletionMessage{
-				{Role: openai.ChatMessageRoleSystem, Content: fmt.Sprintf(c.llmSystemPrompt, userQuery)}, // Use your system prompt
-				{Role: openai.ChatMessageRoleUser, Content: fmt.Sprintf("User query: %s\nRelevant information: %s", userQuery, string(llmInputJSON))},
+				{Role: openai.ChatMessageRoleSystem, Content: c.llmSystemPrompt}, // Use your system prompt
+				{Role: openai.ChatMessageRoleUser, Content: prompt},
 			},
 			Temperature: 0.3,
 			MaxTokens:   2000,

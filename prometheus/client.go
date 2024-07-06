@@ -111,3 +111,45 @@ func (p *PrometheusConnect) CustomQuery(query string) ([]Metric, error) {
 
 	return result.Data.Result, nil
 }
+
+// AllMetadata fetches metadata for all metrics from Prometheus.
+func (p *PrometheusConnect) AllMetadata() (map[string]string, error) {
+	endpoint := p.url + "/api/v1/metadata"
+	req, err := http.NewRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error fetching metadata: %v", err)
+	}
+	req.SetBasicAuth(p.user, p.pass)
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("error fetching metadata: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Status string `json:"status"`
+		Data   map[string][]struct {
+			Type string `json:"type"`
+			Help string `json:"help"`
+			Unit string `json:"unit"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("error decoding metadata response: %v", err)
+	}
+
+	if result.Status != "success" {
+		return nil, fmt.Errorf("Prometheus API error: %s", result.Status)
+	}
+
+	metadata := make(map[string]string)
+	for metricName, infos := range result.Data {
+		if len(infos) > 0 {
+			// Assuming the first entry contains the relevant description for simplicity.
+			metadata[metricName] = infos[0].Help
+		}
+	}
+
+	return metadata, nil
+}

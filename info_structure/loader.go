@@ -4,36 +4,37 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-
-	"github.com/prashantgupta17/nlpromql/config"
 )
 
 // LoadInformationStructure loads all information structures from JSON files.
-func LoadInformationStructure() (MetricMap, LabelMap, MetricLabelMap, LabelValueMap, NlpToMetricMap, error) {
-	var metricMap MetricMap
-	if err := loadMapFromFile(config.MetricMapFile, &metricMap); err != nil {
+func (im *InfoStructureManager) LoadInfoStructure() (MetricMap, LabelMap,
+	MetricLabelMap, LabelValueMap, NlpToMetricMap, error) {
+	var metricMapJSON MetricJsonMap
+	if err := loadMapFromFile(im.PathToMetricMap, &metricMapJSON); err != nil {
 		return MetricMap{}, LabelMap{}, nil, nil, nil, err
 	}
+	metricMap := convertJSONToMetricMap(metricMapJSON)
 
-	var labelMap LabelMap
-	if err := loadMapFromFile(config.LabelMapFile, &labelMap); err != nil {
+	var labelMapJSON LabelJsonMap
+	if err := loadMapFromFile(im.PathToLabelMap, &labelMapJSON); err != nil {
 		return MetricMap{}, LabelMap{}, nil, nil, nil, err
 	}
+	labelMap := convertJSONToLabelMap(labelMapJSON)
 
 	var metricLabelMapJSON MapForJSON
-	if err := loadMapFromFile(config.MetricLabelMapFile, &metricLabelMapJSON); err != nil {
+	if err := loadMapFromFile(im.PathToMetricLabelMap, &metricLabelMapJSON); err != nil {
 		return MetricMap{}, LabelMap{}, nil, nil, nil, err
 	}
 	metricLabelMap := convertJSONToMetricLabelMap(metricLabelMapJSON)
 
 	var labelValueMapJSON MapForJSON
-	if err := loadMapFromFile(config.LabelValueMapFile, &labelValueMapJSON); err != nil {
+	if err := loadMapFromFile(im.PathToLabelValueMap, &labelValueMapJSON); err != nil {
 		return MetricMap{}, LabelMap{}, nil, nil, nil, err
 	}
 	labelValueMap := convertJSONToLabelValueMap(labelValueMapJSON)
 
 	var nlpToMetricMap NlpToMetricMap
-	if err := loadMapFromFile(config.NlpToMetricMapFile, &nlpToMetricMap); err != nil {
+	if err := loadMapFromFile(im.PathToNlpToMetricMap, &nlpToMetricMap); err != nil {
 		return MetricMap{}, LabelMap{}, nil, nil, nil, err
 	}
 
@@ -61,19 +62,66 @@ func loadMapFromFile(filePath string, data interface{}) error {
 	return nil
 }
 
+// convertJSONToLabelMap converts the JSON representation of LabelMap back to the original type.
+func convertJSONToLabelMap(data LabelJsonMap) LabelMap {
+	result := LabelMap{
+		Map:      make(map[string]map[string]struct{}),
+		AllNames: make(map[string]struct{}),
+	}
+	for label, names := range data.Map {
+		result.Map[label] = make(map[string]struct{})
+		for _, name := range names {
+			result.Map[label][name] = struct{}{}
+		}
+	}
+
+	for _, name := range data.AllNames {
+		result.AllNames[name] = struct{}{}
+	}
+	return result
+}
+
+// convertJSONToMetricMap converts the JSON representation of MetricMap back to the original type.
+func convertJSONToMetricMap(data MetricJsonMap) MetricMap {
+	result := MetricMap{
+		Map:      make(map[string]map[string]struct{}),
+		AllNames: make(map[string]struct{}),
+	}
+	for synonym, metrics := range data.Map {
+		result.Map[synonym] = make(map[string]struct{})
+		for _, name := range metrics {
+			result.Map[synonym][name] = struct{}{}
+		}
+	}
+
+	for _, name := range data.AllNames {
+		result.AllNames[name] = struct{}{}
+	}
+	return result
+}
+
 // convertJSONToMetricLabelMap converts the JSON representation of MetricLabelMap back to the original type.
 func convertJSONToMetricLabelMap(data MapForJSON) MetricLabelMap {
 	result := make(MetricLabelMap)
 	for metric, labelsRaw := range data {
 		labels := labelsRaw.(map[string]interface{})
-		result[metric] = make(map[string]map[string]struct{})
+		result[metric] = MetricInfo{
+			Labels: make(map[string]LabelInfo),
+		}
+
 		for label, valuesRaw := range labels {
+			labelInfo, exists := result[metric].Labels[label]
+			if !exists {
+				labelInfo = LabelInfo{
+					Values: make(map[string]struct{}),
+				}
+			}
 			values := valuesRaw.([]interface{})
-			result[metric][label] = make(map[string]struct{})
 			for _, v := range values {
 				value := fmt.Sprintf("%v", v) // Convert interface{} to string
-				result[metric][label][value] = struct{}{}
+				labelInfo.Values[value] = struct{}{}
 			}
+			result[metric].Labels[label] = labelInfo
 		}
 	}
 	return result
@@ -84,11 +132,17 @@ func convertJSONToLabelValueMap(data MapForJSON) LabelValueMap {
 	result := make(LabelValueMap)
 	for label, valuesRaw := range data {
 		values := valuesRaw.([]interface{})
-		result[label] = make(map[string]struct{})
+		labelInfo, exists := result[label]
+		if !exists {
+			labelInfo = LabelInfo{
+				Values: make(map[string]struct{}),
+			}
+		}
 		for _, v := range values {
 			value := fmt.Sprintf("%v", v) // Convert interface{} to string
-			result[label][value] = struct{}{}
+			labelInfo.Values[value] = struct{}{}
 		}
+		result[label] = labelInfo
 	}
 	return result
 }
