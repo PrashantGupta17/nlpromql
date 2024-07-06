@@ -82,7 +82,6 @@ func (p *PrometheusConnect) AllLabels() ([]string, error) {
 // custom_query performs a custom PromQL query against Prometheus.
 func (p *PrometheusConnect) CustomQuery(query string) ([]Metric, error) {
 	endpoint := p.url + "/api/v1/query?query=" + url.QueryEscape(query) + "&time=" + strconv.FormatInt(time.Now().Unix(), 10)
-	fmt.Println("Querying:", endpoint)
 	req, err := http.NewRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating query: %v", err)
@@ -101,7 +100,6 @@ func (p *PrometheusConnect) CustomQuery(query string) ([]Metric, error) {
 			Result     []Metric `json:"result"`
 		} `json:"data"`
 	}
-	// fmt.Println(resp.Body)
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("error decoding query response: %v", err)
 	}

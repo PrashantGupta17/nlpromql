@@ -110,10 +110,8 @@ func (is *InfoStructure) updateMetricMap(allMetricNames []string,
 	newMetricNames := make([]string, 0) // Using a slice for newMetricNames
 	for _, metric := range allMetricNames {
 		found := false
-		fmt.Println("Metric:", metric)
 		for existingMetric, _ := range is.MetricMap.AllNames {
 			if existingMetric == metric {
-				fmt.Println("Metric:", metric)
 				found = true
 				break
 			}
@@ -122,8 +120,6 @@ func (is *InfoStructure) updateMetricMap(allMetricNames []string,
 			newMetricNames = append(newMetricNames, metric)
 		}
 	}
-	fmt.Println("New metrics:")
-	fmt.Println(newMetricNames)
 	newMetricMap := make(map[string]string)
 	for _, metric := range newMetricNames {
 		if desc, exists := allMetricDescriptions[metric]; exists {
@@ -164,10 +160,8 @@ func (is *InfoStructure) updateLabelMap(allLabelNames []string) error {
 	newLabelNames := make([]string, 0)    // Using a slice for newLabelNames
 	for _, label := range allLabelNames { // Assuming you have getLabels() function in prometheus package
 		found := false
-		fmt.Println("Label:", label)
 		for existingLabel, _ := range is.LabelMap.AllNames {
 			if existingLabel == label {
-				fmt.Println("Label:", label)
 				found = true
 				break
 			}
@@ -176,8 +170,6 @@ func (is *InfoStructure) updateLabelMap(allLabelNames []string) error {
 			newLabelNames = append(newLabelNames, label)
 		}
 	}
-	fmt.Println("New labels:")
-	fmt.Println(newLabelNames)
 
 	// Get label synonyms (only for new labels)
 	if len(newLabelNames) > 0 {
@@ -213,8 +205,6 @@ func (is *InfoStructure) updateMetricLabelMapAndLabelValueMap(allMetricNames []s
 			metricsToQuery = append(metricsToQuery, metric)
 		}
 	}
-	fmt.Println("New dict:")
-	fmt.Println(len(metricsToQuery))
 
 	batchSize := 100
 	for i := 0; i < len(metricsToQuery); i += batchSize {

@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"sync"
 
 	"github.com/prashantgupta17/nlpromql/prompts"
 
@@ -68,7 +69,6 @@ func (c *OpenAIClient) GetMetricSynonyms(metricMap map[string]string) (map[strin
 		for j := i; j < i+batchSize && j < len(keys); j++ {
 			batch[keys[j]] = metricMap[keys[j]]
 		}
-		fmt.Println(batch)
 		batchJson, err := json.MarshalIndent(batch, "", "  ")
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling metric batch: %v", err)
@@ -90,7 +90,6 @@ func (c *OpenAIClient) GetMetricSynonyms(metricMap map[string]string) (map[strin
 
 		// Parse the response to get the synonyms
 		rawResponseText := resp.Choices[0].Text
-		fmt.Println(resp.Choices)
 		var batchSynonyms map[string][]string
 		if err := json.Unmarshal([]byte(rawResponseText), &batchSynonyms); err != nil {
 			return nil, fmt.Errorf("error parsing OpenAI response: %v", err)
@@ -111,7 +110,6 @@ func (c *OpenAIClient) GetLabelSynonyms(labelNames []string) (map[string][]strin
 
 	for i := 0; i < len(labelNames); i += batchSize {
 		batch := labelNames[i:int(math.Min(float64(i+batchSize), float64(len(labelNames))))]
-		fmt.Println(batch)
 		batchJson, err := json.MarshalIndent(batch, "", "  ")
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling label batch: %v", err)
@@ -164,7 +162,6 @@ func (c *OpenAIClient) ProcessUserQuery(userQuery string) (map[string]interface{
 	if err != nil {
 		return nil, fmt.Errorf("OpenAI API error: %v", err)
 	}
-	fmt.Println(resp.Choices[0].Message.Content)
 	// Parse and return the response (adjust based on your desired structure)
 	var result map[string]interface{}
 	if err := json.Unmarshal([]byte(resp.Choices[0].Message.Content), &result); err != nil {
@@ -176,8 +173,85 @@ func (c *OpenAIClient) ProcessUserQuery(userQuery string) (map[string]interface{
 // getPromQLFromLLM generates PromQL queries based on user input and context.
 func (c *OpenAIClient) GetPromQLFromLLM(userQuery string, relevantMetrics RelevantMetricsMap,
 	relevantLabels RelevantLabelsMap, relevantHistory map[string]interface{}) ([]string, error) {
-	// Prepare input data for LLM
+	var promQLs []map[string]interface{}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
 
+	// Split relevantMetrics into batches
+	metricKeys := make([]string, 0, len(relevantMetrics))
+	for k := range relevantMetrics {
+		metricKeys = append(metricKeys, k)
+	}
+	sort.Strings(metricKeys)
+	batchSize := 5
+	numBatches := int(math.Ceil(float64(len(metricKeys)) / float64(batchSize)))
+	for i := 0; i < numBatches; i++ {
+		start := i * batchSize
+		end := int(math.Min(float64(start+batchSize), float64(len(metricKeys))))
+		batchMetrics := make(RelevantMetricsMap)
+		for _, key := range metricKeys[start:end] {
+			batchMetrics[key] = relevantMetrics[key]
+		}
+		wg.Add(1)
+		go func(metrics RelevantMetricsMap) {
+			defer wg.Done()
+			promQLBatch, err := newFunction(metrics, RelevantLabelsMap{}, relevantHistory, userQuery, c)
+			if err != nil {
+				// Handle error
+				return
+			}
+			mu.Lock()
+			promQLs = append(promQLs, promQLBatch...)
+			mu.Unlock()
+		}(batchMetrics)
+	}
+
+	// Split relevantLabels into batches
+	labelKeys := make([]string, 0, len(relevantLabels))
+	for k := range relevantLabels {
+		labelKeys = append(labelKeys, k)
+	}
+	sort.Strings(labelKeys)
+	numBatches = int(math.Ceil(float64(len(labelKeys)) / float64(batchSize)))
+	for i := 0; i < numBatches; i++ {
+		start := i * batchSize
+		end := int(math.Min(float64(start+batchSize), float64(len(labelKeys))))
+		batchLabels := make(RelevantLabelsMap)
+		for _, key := range labelKeys[start:end] {
+			batchLabels[key] = relevantLabels[key]
+		}
+		wg.Add(1)
+		go func(labels RelevantLabelsMap) {
+			defer wg.Done()
+			promQLBatch, err := newFunction(RelevantMetricsMap{}, labels, relevantHistory, userQuery, c)
+			if err != nil {
+				// Handle error
+				return
+			}
+			mu.Lock()
+			promQLs = append(promQLs, promQLBatch...)
+			mu.Unlock()
+		}(batchLabels)
+	}
+
+	wg.Wait()
+	sort.Slice(promQLs, func(i, j int) bool {
+		scoreI := promQLs[i]["score"].(float64)
+		scoreJ := promQLs[j]["score"].(float64)
+		return scoreI > scoreJ
+	})
+
+	var sortedPromqlOptions []string
+	for _, option := range promQLs {
+		promql := option["promql"].(string)
+		sortedPromqlOptions = append(sortedPromqlOptions, promql)
+	}
+
+	return sortedPromqlOptions, nil
+}
+
+func newFunction(relevantMetrics RelevantMetricsMap, relevantLabels RelevantLabelsMap,
+	relevantHistory map[string]interface{}, userQuery string, c *OpenAIClient) ([]map[string]interface{}, error) {
 	prompt := fmt.Sprintf("#Relevant Metrics:\n%s\n\n#Relevant Labels:\n%s\n\n#Relevant History:\n%s\n\n#User Query:\n%s",
 		func() string {
 			relevantMetricsJSON, _ := json.MarshalIndent(relevantMetrics, "", "  ")
@@ -193,14 +267,13 @@ func (c *OpenAIClient) GetPromQLFromLLM(userQuery string, relevantMetrics Releva
 		}(),
 		userQuery,
 	)
-	fmt.Println("Prompt:", prompt)
-	// Send data to LLM for PromQL generation
+
 	resp, err := c.client.CreateChatCompletion(
 		context.Background(),
 		openai.ChatCompletionRequest{
 			Model: openai.GPT3Dot5Turbo,
 			Messages: []openai.ChatCompletionMessage{
-				{Role: openai.ChatMessageRoleSystem, Content: c.llmSystemPrompt}, // Use your system prompt
+				{Role: openai.ChatMessageRoleSystem, Content: c.llmSystemPrompt},
 				{Role: openai.ChatMessageRoleUser, Content: prompt},
 			},
 			Temperature: 0.3,
@@ -212,26 +285,9 @@ func (c *OpenAIClient) GetPromQLFromLLM(userQuery string, relevantMetrics Releva
 		return nil, fmt.Errorf("OpenAI API error: %v", err)
 	}
 
-	// Parse the response into PromQL options
 	var promqlOptions []map[string]interface{}
-	fmt.Println(resp.Choices[0].Message.Content)
 	if err := json.Unmarshal([]byte(resp.Choices[0].Message.Content), &promqlOptions); err != nil {
 		return nil, fmt.Errorf("error parsing OpenAI response: %v", err)
 	}
-
-	// Sort promqlOptions by score
-	sort.Slice(promqlOptions, func(i, j int) bool {
-		scoreI := promqlOptions[i]["score"].(float64)
-		scoreJ := promqlOptions[j]["score"].(float64)
-		return scoreI > scoreJ
-	})
-
-	// Extract promql values into a new string array
-	var sortedPromqlOptions []string
-	for _, option := range promqlOptions {
-		promql := option["promql"].(string)
-		sortedPromqlOptions = append(sortedPromqlOptions, promql)
-	}
-
-	return sortedPromqlOptions, nil
+	return promqlOptions, nil
 }
