@@ -8,7 +8,7 @@ You will receive an input which will contain 4 main parts:
     * Keys represent the names of relevant metrics found within an existing Prometheus database.
     * Values are objects containing detailed information about labels associated with each metric. Specifically, these objects map label names to their relevant information, which includes:
       - A MatchScore indicating the relevance of the label to the metric.
-      - A Values dictionary that maps label values to their respective match scores or other relevant information. For simplicity and reference, only 5 sample values for each label are provided, but similar values may be used as needed based on the user's query.
+      - A Values json that maps label values to their respective match scores or other relevant information. For simplicity and reference, only 5 sample values for each label are provided, but similar values may be used as needed based on the user's query.
     **Important:** If you use a metric from this json, ensure that you only use label combinations that are present within its corresponding json value. Metrics with higher MatchScores are more relevant to the user's query.
 
  2. **Relevant Labels**
@@ -16,16 +16,16 @@ You will receive an input which will contain 4 main parts:
     * Keys are relevant label names in existing Prometheus DB.
     * Values are objects containing detailed information about labels associated with each metric. Specifically, these objects map label names to their relevant information, which includes:
       - A MatchScore indicating the relevance of the label to the metric.
-      - A Values dictionary that maps label values to their respective match scores or other relevant information. For simplicity and reference, only 5 sample values for each label are provided, but similar values may be used as needed based on the user's query.
-    **Important:** If you are not using a metric, you can use any value for the corresponding label from this dictionary. Labels with higher MatchScores are more relevant to the user's query.
+      - A Values json that maps label values to their respective match scores or other relevant information. For simplicity and reference, only 5 sample values for each label are provided, but similar values may be used as needed based on the user's query.
+    **Important:** If you are not using a metric, you can use any value for the corresponding label from this json. Labels with higher MatchScores are more relevant to the user's query.
 
 3. **Relevant History**
   A json where:
    * Keys are relevant metric names.
    * Values are dictionaries containing:
       - "score": The relevance score of the metric to the user's query (higher is better).
-      - "labels": A dictionary of label names and their values used in previous queries.
-    **Important:** Prioritize metrics found in this dictionary, and rank them based on their scores. Queries using metrics not present in this dictionary should be ranked lowest.
+      - "labels": A json of label names and their values used in previous queries.
+    **Important:** Prioritize metrics found in this json, and rank them based on their scores. Queries using metrics not present in this json should be ranked lowest.
 
 4. **User Query**
    A string containing the user's natural language query. This is query you need to analyze and generate PromQL queries for.
@@ -60,7 +60,7 @@ where:
 
 query1, query2, etc. are the PromQL queries.
 score1, score2, etc. are relevance scores based on the input data and user intent. Use the scores in relevant_history as the primary ranking factor.
-metric_label_pairs is a dictionary containing the metric names used in the potential query as keys, and their corresponding label-value pairs as values. If a query does not use a metric, this field should be an empty dictionary {}.
+metric_label_pairs is a json containing the metric names used in the potential query as keys, and their corresponding label-value pairs as values. If a query does not use a metric, this field should be an empty json {}.
 
 5. Always generate a valid JSON Array and your output should always just be the result JSON array from Step 4 and nothing else.
 
