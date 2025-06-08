@@ -8,21 +8,61 @@ import (
 	"strings"
 
 	"github.com/prashantgupta17/nlpromql/info_structure"
+	// Removed duplicate: "github.com/prashantgupta17/nlpromql/info_structure"
+	"github.com/prashantgupta17/nlpromql/langchain"
+	"github.com/prashantgupta17/nlpromql/llm"
 	"github.com/prashantgupta17/nlpromql/openai"
 	"github.com/prashantgupta17/nlpromql/prometheus"
 	"github.com/prashantgupta17/nlpromql/query_processing"
 	"github.com/prashantgupta17/nlpromql/server"
+	// lcLLMs "github.com/tmc/langchaingo/llms" // Removed unused import alias
+	lcOpenai "github.com/tmc/langchaingo/llms/openai"
 )
 
 func main() {
 	mode := flag.String("mode", "server", "Mode of operation: 'server' or 'chat'")
 	port := flag.String("port", "8080", "Port for the HTTP server (server mode only)")
+	llmProviderFlag := flag.String("llm_provider", "openai", "LLM provider to use: 'openai' or 'langchain'. Default is 'openai'.")
 
 	flag.Parse()
 
-	openaiClient, err := openai.NewOpenAIClient()
-	if err != nil {
-		fmt.Println("Error initializing OpenAI client:", err)
+	var chosenLLMClient llm.LLMClient
+	var err error
+
+	// Determine LLM provider
+	provider := *llmProviderFlag
+	envProvider := os.Getenv("LLM_PROVIDER")
+
+	if provider == "openai" && envProvider != "" { // Default flag value, env var might override
+		provider = envProvider
+	}
+	// If flag is set to non-default, it takes precedence over env var.
+
+	fmt.Printf("Using LLM provider: %s\n", provider)
+
+	switch provider {
+	case "openai":
+		oaiClient, oaiErr := openai.NewOpenAIClient()
+		if oaiErr != nil {
+			fmt.Println("Error initializing OpenAI client:", oaiErr)
+			os.Exit(1)
+		}
+		chosenLLMClient = oaiClient
+	case "langchain":
+		apiKey := os.Getenv("OPENAI_API_KEY") // Langchain's OpenAI model also needs this
+		if apiKey == "" {
+			fmt.Println("OPENAI_API_KEY environment variable not set, required for Langchain with OpenAI model")
+			os.Exit(1)
+		}
+		lcLLM, lcErr := lcOpenai.New(lcOpenai.WithToken(apiKey))
+		if lcErr != nil {
+			fmt.Println("Error initializing Langchain OpenAI model:", lcErr)
+			os.Exit(1)
+		}
+		lcClient := langchain.NewLangChainClient(lcLLM) // Assuming NewLangChainClient doesn't return an error for now or it's handled inside
+		chosenLLMClient = lcClient
+	default:
+		fmt.Printf("Unknown LLM provider: %s. Supported providers are 'openai' or 'langchain'.\n", provider)
 		os.Exit(1)
 	}
 
@@ -36,7 +76,7 @@ func main() {
 	// (You'll need to fill in the actual Prometheus URL, username, and password)
 	promClient := prometheus.NewPrometheusConnect(promURL, promUser, promPassword)
 
-	infoBuilder, err := info_structure.NewInfoBuilder(promClient, openaiClient, nil)
+	infoBuilder, err := info_structure.NewInfoBuilder(promClient, chosenLLMClient, nil)
 	if err != nil {
 		fmt.Println("Error getting info builder:", err)
 		os.Exit(1)
@@ -61,7 +101,7 @@ func main() {
 	switch *mode {
 	case "server":
 		promqlServer := server.NewPromQLServer(
-			openaiClient,
+			chosenLLMClient,
 			*infoBuilder.MetricMap,
 			*infoBuilder.LabelMap,
 			*infoBuilder.MetricLabelMap,
@@ -73,7 +113,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "chat":
-		runChatMode(openaiClient,
+		runChatMode(chosenLLMClient,
 			*infoBuilder.MetricMap,
 			*infoBuilder.LabelMap,
 			*infoBuilder.MetricLabelMap,
@@ -86,7 +126,7 @@ func main() {
 	}
 }
 
-func runChatMode(openaiClient *openai.OpenAIClient, metricMap info_structure.MetricMap, labelMap info_structure.LabelMap,
+func runChatMode(llmClient llm.LLMClient, metricMap info_structure.MetricMap, labelMap info_structure.LabelMap,
 	metricLabelMap info_structure.MetricLabelMap, labelValueMap info_structure.LabelValueMap,
 	nlpToMetricMap info_structure.NlpToMetricMap) {
 	reader := bufio.NewReader(os.Stdin)
@@ -101,7 +141,7 @@ func runChatMode(openaiClient *openai.OpenAIClient, metricMap info_structure.Met
 		}
 
 		possibleMatches, relevantMetrics, relevantLabels, relevantHistory, err := query_processing.ProcessUserQuery(
-			openaiClient, userQuery, metricMap, labelMap, metricLabelMap, labelValueMap, nlpToMetricMap,
+			llmClient, userQuery, metricMap, labelMap, metricLabelMap, labelValueMap, nlpToMetricMap,
 		)
 		if err != nil {
 			fmt.Println("Error processing user query:", err)
@@ -113,7 +153,7 @@ func runChatMode(openaiClient *openai.OpenAIClient, metricMap info_structure.Met
 		fmt.Println("Relevant Labels:", relevantLabels)
 		fmt.Println("Relevant History:", relevantHistory)
 
-		promqlOptions, err := openaiClient.GetPromQLFromLLM(userQuery, relevantMetrics, relevantLabels, relevantHistory)
+		promqlOptions, err := llmClient.GetPromQLFromLLM(userQuery, relevantMetrics, relevantLabels, relevantHistory)
 		if err != nil {
 			fmt.Println("Error generating PromQL options:", err)
 			continue

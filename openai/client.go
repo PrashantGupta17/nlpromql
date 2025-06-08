@@ -12,25 +12,11 @@ import (
 	"github.com/prashantgupta17/nlpromql/prompts"
 
 	openai "github.com/sashabaranov/go-openai"
+	"github.com/prashantgupta17/nlpromql/llm"
 )
 
-// MetricInfo holds information about a metric, including its labels.
-type RelevantMetricInfo struct {
-	MatchScore int                          `json:"match_score"`
-	Labels     map[string]RelevantLabelInfo `json:"labels"`
-}
-
-// LabelInfo holds information about a label, including its values.
-type RelevantLabelInfo struct {
-	MatchScore int                    `json:"match_score"`
-	Values     map[string]interface{} `json:"values"`
-}
-
-// MetricLabelMap represents a map of metric names to their labels and values (sets).
-type RelevantMetricsMap map[string]RelevantMetricInfo // Nested map: metric -> label -> value set
-
-// LabelValueMap represents a map of label names to their values (sets).
-type RelevantLabelsMap map[string]RelevantLabelInfo // Nested map: label -> value set
+// Compile-time check to ensure OpenAIClient implements llm.LLMClient interface
+var _ llm.LLMClient = (*OpenAIClient)(nil)
 
 type OpenAIClient struct {
 	client              *openai.Client
@@ -185,8 +171,8 @@ func (c *OpenAIClient) ProcessUserQuery(userQuery string) (map[string]interface{
 }
 
 // getPromQLFromLLM generates PromQL queries based on user input and context.
-func (c *OpenAIClient) GetPromQLFromLLM(userQuery string, relevantMetrics RelevantMetricsMap,
-	relevantLabels RelevantLabelsMap, relevantHistory map[string]interface{}) ([]string, error) {
+func (c *OpenAIClient) GetPromQLFromLLM(userQuery string, relevantMetrics llm.RelevantMetricsMap,
+	relevantLabels llm.RelevantLabelsMap, relevantHistory map[string]interface{}) ([]string, error) {
 	var promQLs []map[string]interface{}
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -202,14 +188,14 @@ func (c *OpenAIClient) GetPromQLFromLLM(userQuery string, relevantMetrics Releva
 	for i := 0; i < numBatches; i++ {
 		start := i * batchSize
 		end := int(math.Min(float64(start+batchSize), float64(len(metricKeys))))
-		batchMetrics := make(RelevantMetricsMap)
+		batchMetrics := make(llm.RelevantMetricsMap)
 		for _, key := range metricKeys[start:end] {
 			batchMetrics[key] = relevantMetrics[key]
 		}
 		wg.Add(1)
-		go func(metrics RelevantMetricsMap) {
+		go func(metrics llm.RelevantMetricsMap) {
 			defer wg.Done()
-			promQLBatch, err := newFunction(metrics, RelevantLabelsMap{}, relevantHistory, userQuery, c)
+			promQLBatch, err := newFunction(metrics, llm.RelevantLabelsMap{}, relevantHistory, userQuery, c)
 			if err != nil {
 				// Handle error
 				return
@@ -230,14 +216,14 @@ func (c *OpenAIClient) GetPromQLFromLLM(userQuery string, relevantMetrics Releva
 	for i := 0; i < numBatches; i++ {
 		start := i * batchSize
 		end := int(math.Min(float64(start+batchSize), float64(len(labelKeys))))
-		batchLabels := make(RelevantLabelsMap)
+		batchLabels := make(llm.RelevantLabelsMap)
 		for _, key := range labelKeys[start:end] {
 			batchLabels[key] = relevantLabels[key]
 		}
 		wg.Add(1)
-		go func(labels RelevantLabelsMap) {
+		go func(labels llm.RelevantLabelsMap) {
 			defer wg.Done()
-			promQLBatch, err := newFunction(RelevantMetricsMap{}, labels, relevantHistory, userQuery, c)
+			promQLBatch, err := newFunction(llm.RelevantMetricsMap{}, labels, relevantHistory, userQuery, c)
 			if err != nil {
 				// Handle error
 				return
@@ -264,7 +250,7 @@ func (c *OpenAIClient) GetPromQLFromLLM(userQuery string, relevantMetrics Releva
 	return sortedPromqlOptions, nil
 }
 
-func newFunction(relevantMetrics RelevantMetricsMap, relevantLabels RelevantLabelsMap,
+func newFunction(relevantMetrics llm.RelevantMetricsMap, relevantLabels llm.RelevantLabelsMap,
 	relevantHistory map[string]interface{}, userQuery string, c *OpenAIClient) ([]map[string]interface{}, error) {
 	prompt := fmt.Sprintf("#Relevant Metrics:\n%s\n\n#Relevant Labels:\n%s\n\n#Relevant History:\n%s\n\n#User Query:\n%s",
 		func() string {

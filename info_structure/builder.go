@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/prashantgupta17/nlpromql/openai"
+	"github.com/prashantgupta17/nlpromql/llm"
 )
 
 // NewInfoBuilder creates a new InfoBuilder struct.
-func NewInfoBuilder(queryEngine QueryEngine, openaiClient *openai.OpenAIClient,
+func NewInfoBuilder(queryEngine QueryEngine, llmClient llm.LLMClient,
 	loaderSaver InfoLoaderSaver) (*InfoStructure, error) {
 	if loaderSaver == nil {
 		defaultLoaderSaver, err := getDefaultInfoLoaderSaver()
@@ -23,7 +23,7 @@ func NewInfoBuilder(queryEngine QueryEngine, openaiClient *openai.OpenAIClient,
 	}
 	return &InfoStructure{
 		QueryEngine:     queryEngine,
-		OpenAIClient:    openaiClient,
+		llmClient:       llmClient,
 		InfoLoaderSaver: loaderSaver,
 	}, nil
 }
@@ -192,7 +192,7 @@ func (is *InfoStructure) updateMetricMap(allMetricNames []string,
 	fmt.Printf("%d", len(newMetricNames))
 	// Get metric synonyms (only for new metrics)
 	if len(newMetricNames) > 0 {
-		newMetricSynonyms, err := is.OpenAIClient.GetMetricSynonyms(newMetricMap)
+		newMetricSynonyms, err := is.llmClient.GetMetricSynonyms(newMetricMap)
 		if err != nil {
 			return fmt.Errorf("error getting metric synonyms: %w", err)
 		}
@@ -234,7 +234,7 @@ func (is *InfoStructure) updateLabelMap(allLabelNames []string) error {
 
 	// Get label synonyms (only for new labels)
 	if len(newLabelNames) > 0 {
-		newLabelSynonyms, err := is.OpenAIClient.GetLabelSynonyms(newLabelNames)
+		newLabelSynonyms, err := is.llmClient.GetLabelSynonyms(newLabelNames)
 		if err != nil {
 			return fmt.Errorf("error getting label synonyms: %w", err)
 		}

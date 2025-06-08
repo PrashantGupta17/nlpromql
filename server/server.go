@@ -5,11 +5,11 @@ import (
 	"net/http"
 
 	"github.com/prashantgupta17/nlpromql/info_structure"
-	"github.com/prashantgupta17/nlpromql/openai"
+	"github.com/prashantgupta17/nlpromql/llm"
 )
 
 type PromQLServer struct {
-	openaiClient   *openai.OpenAIClient
+	llmClient      llm.LLMClient
 	metricMap      info_structure.MetricMap
 	labelMap       info_structure.LabelMap
 	metricLabelMap info_structure.MetricLabelMap
@@ -17,11 +17,11 @@ type PromQLServer struct {
 	nlpToMetricMap info_structure.NlpToMetricMap
 }
 
-func NewPromQLServer(openaiClient *openai.OpenAIClient, metricMap info_structure.MetricMap, labelMap info_structure.LabelMap,
+func NewPromQLServer(llmClient llm.LLMClient, metricMap info_structure.MetricMap, labelMap info_structure.LabelMap,
 	metricLabelMap info_structure.MetricLabelMap, labelValueMap info_structure.LabelValueMap, nlpToMetricMap info_structure.NlpToMetricMap) *PromQLServer {
 
 	return &PromQLServer{
-		openaiClient:   openaiClient,
+		llmClient:      llmClient,
 		metricMap:      metricMap,
 		labelMap:       labelMap,
 		metricLabelMap: metricLabelMap,

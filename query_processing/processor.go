@@ -5,11 +5,12 @@ import (
 	"fmt"
 
 	"github.com/prashantgupta17/nlpromql/info_structure" // Replace with the actual path
-	"github.com/prashantgupta17/nlpromql/openai"         // Replace with the actual path
+	"github.com/prashantgupta17/nlpromql/llm"            // Replace with the actual path
 )
 
 // processUserQuery3 processes the user query to extract potential metrics and labels.
-func processUserQuery3(client *openai.OpenAIClient, userQuery string) (map[string]interface{}, error) {
+// Changed client type to llm.LLMClient
+func processUserQuery3(client llm.LLMClient, userQuery string) (map[string]interface{}, error) {
 	possibleMatches, err := client.ProcessUserQuery(userQuery)
 	if err != nil {
 		return nil, err
@@ -18,131 +19,199 @@ func processUserQuery3(client *openai.OpenAIClient, userQuery string) (map[strin
 }
 
 // processUserQuery processes the user query using the information structure.
-func ProcessUserQuery(client *openai.OpenAIClient, userQuery string, metricMap info_structure.MetricMap, labelMap info_structure.LabelMap,
+// Changed client type to llm.LLMClient and return types to llm.RelevantMetricsMap, llm.RelevantLabelsMap
+func ProcessUserQuery(client llm.LLMClient, userQuery string, metricMap info_structure.MetricMap, labelMap info_structure.LabelMap,
 	metricLabelMap info_structure.MetricLabelMap, labelValueMap info_structure.LabelValueMap,
-	nlpToMetricMap info_structure.NlpToMetricMap) (map[string]interface{}, openai.RelevantMetricsMap, openai.RelevantLabelsMap, map[string]interface{}, error) {
+	nlpToMetricMap info_structure.NlpToMetricMap) (map[string]interface{}, llm.RelevantMetricsMap, llm.RelevantLabelsMap, map[string]interface{}, error) {
 
 	possibleMatches, err := processUserQuery3(client, userQuery)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 	fmt.Println("Possible Matches:", possibleMatches)
-	relevantMetrics := make(openai.RelevantMetricsMap)
-	relevantLabels := make(openai.RelevantLabelsMap)
+	relevantMetrics := make(llm.RelevantMetricsMap)
+	relevantLabels := make(llm.RelevantLabelsMap)
 	relevantHistory := make(map[string]interface{})
 
-	// Process possible metric names (logic similar to your Python code)
-	for _, metricToken := range possibleMatches["possible_metric_names"].([]interface{}) {
-		metricTokenStr := metricToken.(string)
-		if metricNames, exists := metricMap.Map[metricTokenStr]; exists {
-			for metricName := range metricNames {
-				// Extract the MetricInfo struct from the map
-				metricInfo, exists := relevantMetrics[metricName]
-				if !exists {
-					// If it doesn't exist, initialize it
-					metricInfo = openai.RelevantMetricInfo{
-						MatchScore: 1, // Start with a score of 1
-						Labels:     make(map[string]openai.RelevantLabelInfo),
-					}
-					relevantMetrics[metricName] = metricInfo
-				} else {
-					// If it exists, increment the MatchScore
-					metricInfo.MatchScore++
-					relevantMetrics[metricName] = metricInfo
-					continue
-				}
-
-				// Process possible label names for this metric
-				for _, labelToken := range possibleMatches["possible_label_names"].([]interface{}) {
-					labelTokenStr := labelToken.(string)
-					if labelNames, exists := labelMap.Map[labelTokenStr]; exists {
-						for labelName := range labelNames {
-							labelInfo, exists := relevantMetrics[metricName].Labels[labelName]
-							if !exists {
-								// If it doesn't exist, initialize it
-								labelInfo = openai.RelevantLabelInfo{
-									MatchScore: 1, // Start with a score of 1
-									Values:     make(map[string]interface{}),
-								}
-							} else {
-								// If it exists, increment the MatchScore
-								labelInfo.MatchScore++
-								relevantMetrics[metricName].Labels[labelName] = labelInfo
-								continue
-							}
-							if labelValues, exists := metricLabelMap[metricName].Labels[labelName]; exists {
-								labelValuesSlice := make([]string, 0, len(labelValues.Values))
-								for val := range labelValues.Values {
-									labelValuesSlice = append(labelValuesSlice, val)
-								}
-								if len(labelValuesSlice) > 5 {
-									labelValuesSlice = labelValuesSlice[:5]
-								}
-								for _, value := range labelValuesSlice {
-									labelInfo.Values[value] = nil
-								}
-							}
-							relevantMetrics[metricName].Labels[labelName] = labelInfo
-						}
-					}
-				}
+	// Define a helper to extract up to 5 string values from a map[string]struct{}
+	getSampleValues := func(valueSet map[string]struct{}) []string {
+		values := make([]string, 0, len(valueSet))
+		count := 0
+		for val := range valueSet {
+			if count >= 5 {
+				break
 			}
+			values = append(values, val)
+			count++
 		}
+		return values
 	}
 
-	// Process possible label names (logic similar to your Python code)
-	for _, labelToken := range possibleMatches["possible_label_names"].([]interface{}) {
-		labelTokenStr := labelToken.(string)
-		for actualLabelName := range labelMap.Map[labelTokenStr] {
-			relevantLabelInfo, exists := relevantLabels[actualLabelName]
-			if !exists {
-				// Initialize the LabelInfo struct
-				relevantLabelInfo = openai.RelevantLabelInfo{
-					MatchScore: 1, // Start with a score of 1
-					Values:     make(map[string]interface{}),
-				}
-			} else {
-				// If it exists, increment the MatchScore
-				relevantLabelInfo.MatchScore++
-				relevantLabels[actualLabelName] = relevantLabelInfo
+	// Process possible metric names to populate relevantMetrics
+	// llm.RelevantMetricsMap is map[string]map[string]llm.LabelContextDetail
+	if metricTokens, ok := possibleMatches["possible_metric_names"].([]interface{}); ok {
+		for _, metricToken := range metricTokens {
+			metricTokenStr, isString := metricToken.(string)
+			if !isString {
 				continue
 			}
+			// Find actual metric names from the token (synonym)
+			if actualMetricNames, exists := metricMap.Map[metricTokenStr]; exists {
+				for metricName := range actualMetricNames {
+					if _, metricEntryExists := relevantMetrics[metricName]; !metricEntryExists {
+						relevantMetrics[metricName] = make(map[string]llm.LabelContextDetail)
+					}
 
-			if labelInfo, exists := labelValueMap[actualLabelName]; exists {
-				// Ensure values is a slice of strings before slicing
-				valuesSlice := make([]string, 0, len(labelInfo.Values))
-				for val := range labelInfo.Values {
-					valuesSlice = append(valuesSlice, val)
-				}
-				if len(valuesSlice) > 5 {
-					valuesSlice = valuesSlice[:5]
-				}
-				for _, value := range valuesSlice {
-					relevantLabelInfo.Values[value] = nil
+					// Now, for this metricName, find its relevant labels and their values
+					// Iterate through possible label names identified by the LLM
+					if labelTokens, ok := possibleMatches["possible_label_names"].([]interface{}); ok {
+						for _, labelToken := range labelTokens {
+							labelTokenStr, isStringLabelToken := labelToken.(string)
+							if !isStringLabelToken {
+								continue
+							}
+							// Find actual label names from the token
+							if actualLabelNames, labelTokenExists := labelMap.Map[labelTokenStr]; labelTokenExists {
+								for actualLabelName := range actualLabelNames {
+									// Check if this actualLabelName is a valid label for metricName
+									if metricInfoFromMap, metricInLabelMapExists := metricLabelMap[metricName]; metricInLabelMapExists {
+										if labelDetailForMetric, labelValidForMetric := metricInfoFromMap.Labels[actualLabelName]; labelValidForMetric {
+											// We found a valid label for this metric. Populate its context.
+											if _, labelContextExists := relevantMetrics[metricName][actualLabelName]; !labelContextExists {
+												relevantMetrics[metricName][actualLabelName] = llm.LabelContextDetail{
+													MatchScore: 1.0, // Placeholder score
+													Values:     getSampleValues(labelDetailForMetric.Values),
+												}
+											} else {
+												// If label context already exists, we could increment score or merge values.
+												// For now, simple approach: assume first encountered is fine, or update score.
+												temp := relevantMetrics[metricName][actualLabelName]
+												temp.MatchScore += 0.5 // Increment score if mentioned again
+												relevantMetrics[metricName][actualLabelName] = temp
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+					// Also consider labels directly from possible_label_values if they apply to this metric
+                    if labelValueTokens, ok := possibleMatches["possible_label_values"].([]interface{}); ok {
+                        for _, lvToken := range labelValueTokens {
+                            lvTokenStr, isStringLVToken := lvToken.(string)
+                            if !isStringLVToken {
+                                continue
+                            }
+                            // This part is tricky: lvTokenStr is a value. We need to find which label it belongs to
+                            // and if that label is relevant for the current metricName.
+                            // This might require iterating through all labels of metricName and checking if lvTokenStr is a value for any of them.
+                            if metricInfoFromMap, metricInLabelMapExists := metricLabelMap[metricName]; metricInLabelMapExists {
+                                for labelNameForMetric, labelDetailForMetric := range metricInfoFromMap.Labels {
+                                    if _, valueExistsInLabel := labelDetailForMetric.Values[lvTokenStr]; valueExistsInLabel {
+                                        if _, labelContextExists := relevantMetrics[metricName][labelNameForMetric]; !labelContextExists {
+                                             relevantMetrics[metricName][labelNameForMetric] = llm.LabelContextDetail{
+                                                MatchScore: 1.0, // Placeholder for value match
+                                                Values:     []string{lvTokenStr}, // Specific value matched
+                                            }
+                                        } else {
+                                            // Append value if not present, update score
+                                            temp := relevantMetrics[metricName][labelNameForMetric]
+                                            valueFound := false
+                                            for _, v := range temp.Values { if v == lvTokenStr { valueFound = true; break } }
+                                            if !valueFound { temp.Values = append(temp.Values, lvTokenStr) }
+                                            temp.MatchScore += 0.2 // Increment score for value match
+                                            relevantMetrics[metricName][labelNameForMetric] = temp
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 				}
 			}
-			relevantLabels[actualLabelName] = relevantLabelInfo
 		}
 	}
 
-	// Retrieve relevant info from nlp_to_metric_map (without score updates)
-	for key, value := range nlpToMetricMap {
-		keyParts := make([]string, 0)
-		if err := json.Unmarshal([]byte(key), &keyParts); err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("error unmarshaling nlpToMetricMap key: %v", err)
-		}
-		if containsAny(possibleMatches["possible_metric_names"].([]interface{}), keyParts[0]) &&
-			containsAny(possibleMatches["possible_label_names"].([]interface{}), keyParts[1]) {
-			// Convert value (interface{}) to map[string]interface{}
-			var valueMap map[string]interface{}
-			if err := json.Unmarshal([]byte(value), &valueMap); err != nil {
-				return nil, nil, nil, nil, fmt.Errorf("error unmarshaling nlpToMetricMap value: %v", err)
+	// Process possible label names to populate relevantLabels
+	// llm.RelevantLabelsMap is map[string]llm.LabelContextDetail
+	if labelTokens, ok := possibleMatches["possible_label_names"].([]interface{}); ok {
+		for _, labelToken := range labelTokens {
+			labelTokenStr, isString := labelToken.(string)
+			if !isString {
+				continue
 			}
-			for k, v := range valueMap {
-				relevantHistory[k] = v
+			if actualLabelNames, exists := labelMap.Map[labelTokenStr]; exists {
+				for actualLabelName := range actualLabelNames {
+					if _, labelEntryExists := relevantLabels[actualLabelName]; !labelEntryExists {
+						// Get sample values for this general label from labelValueMap
+						sampleValues := []string{}
+						if labelInfoFromMap, labelInValueMapExists := labelValueMap[actualLabelName]; labelInValueMapExists {
+							sampleValues = getSampleValues(labelInfoFromMap.Values)
+						}
+						relevantLabels[actualLabelName] = llm.LabelContextDetail{
+							MatchScore: 1.0, // Placeholder score
+							Values:     sampleValues,
+						}
+					} else {
+						temp := relevantLabels[actualLabelName]
+						temp.MatchScore += 0.5
+						relevantLabels[actualLabelName] = temp
+					}
+				}
 			}
 		}
 	}
+    // Add label values from "possible_label_values" to relevantLabels
+    if labelValueTokens, ok := possibleMatches["possible_label_values"].([]interface{}); ok {
+        for _, lvToken := range labelValueTokens {
+            lvTokenStr, isStringLVToken := lvToken.(string)
+            if !isStringLVToken {
+                continue
+            }
+            // Find which label this value might belong to by checking labelValueMap
+            for generalLabelName, generalLabelInfo := range labelValueMap {
+                if _, valueExistsInGeneralLabel := generalLabelInfo.Values[lvTokenStr]; valueExistsInGeneralLabel {
+                    if entry, exists := relevantLabels[generalLabelName]; !exists {
+                        relevantLabels[generalLabelName] = llm.LabelContextDetail{
+                            MatchScore: 1.0,
+                            Values:     []string{lvTokenStr},
+                        }
+                    } else {
+                        valueFound := false
+                        for _, v := range entry.Values { if v == lvTokenStr { valueFound = true; break } }
+                        if !valueFound { entry.Values = append(entry.Values, lvTokenStr) }
+                        entry.MatchScore += 0.2
+                        relevantLabels[generalLabelName] = entry
+                    }
+                }
+            }
+        }
+    }
+
+
+	// Retrieve relevant info from nlp_to_metric_map (logic remains similar)
+	// This part populates `relevantHistory` which is map[string]interface{} and doesn't need structural change for its value.
+	if possibleMetricNames, pmnOK := possibleMatches["possible_metric_names"].([]interface{}); pmnOK {
+		if possibleLabelNames, plnOK := possibleMatches["possible_label_names"].([]interface{}); plnOK {
+			for key, value := range nlpToMetricMap {
+				keyParts := make([]string, 0)
+				if err := json.Unmarshal([]byte(key), &keyParts); err != nil {
+					return nil, nil, nil, nil, fmt.Errorf("error unmarshaling nlpToMetricMap key: %v", err)
+				}
+				if len(keyParts) == 2 && containsAny(possibleMetricNames, keyParts[0]) &&
+					containsAny(possibleLabelNames, keyParts[1]) {
+					var valueMap map[string]interface{}
+					if err := json.Unmarshal([]byte(value), &valueMap); err != nil {
+						return nil, nil, nil, nil, fmt.Errorf("error unmarshaling nlpToMetricMap value: %v", err)
+					}
+					for k, v := range valueMap {
+						relevantHistory[k] = v
+					}
+				}
+			}
+		}
+	}
+
 	fmt.Println("Relevant Metrics:", relevantMetrics)
 	fmt.Println("Relevant Labels:", relevantLabels)
 	fmt.Println("Relevant History:", relevantHistory)
