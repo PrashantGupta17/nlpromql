@@ -1,6 +1,9 @@
 package info_structure
 
 import (
+	"sync"
+	"time"
+
 	"github.com/prashantgupta17/nlpromql/openai"
 	"github.com/prashantgupta17/nlpromql/prometheus"
 )
@@ -18,6 +21,17 @@ type InfoStructure struct {
 	QueryEngine     QueryEngine
 	OpenAIClient    *openai.OpenAIClient
 	InfoLoaderSaver InfoLoaderSaver
+
+	buildStatus     BuildStatus
+	buildStatusLock sync.RWMutex
+}
+
+type BuildStatus struct {
+	IsRunning     bool
+	StartTime     time.Time
+	EndTime       time.Time
+	Error         error
+	ProgressStage string
 }
 
 // MetricMap represents a map of metric tokens to metric names.

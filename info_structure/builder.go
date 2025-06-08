@@ -2,9 +2,11 @@ package info_structure
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/prashantgupta17/nlpromql/openai"
 )
@@ -47,11 +49,28 @@ func getDefaultInfoLoaderSaver() (InfoLoaderSaver, error) {
 
 // BuildInformationStructure builds or updates the information structure from Prometheus data.
 func (is *InfoStructure) BuildInformationStructure() error {
+	is.buildStatusLock.Lock()
+	is.buildStatus = BuildStatus{
+		IsRunning:     true,
+		StartTime:     time.Now(),
+		ProgressStage: "Initializing",
+	}
+	is.buildStatusLock.Unlock()
+
+	defer func() {
+		is.buildStatusLock.Lock()
+		is.buildStatus.IsRunning = false
+		is.buildStatus.EndTime = time.Now()
+		is.buildStatusLock.Unlock()
+	}()
+
+	is.updateProgressStage("Loading info structure")
 	// Load existing information structure (if it exists)
 	metricMap, labelMap, metricLabelMap, labelValueMap,
 		nlpToMetricMap, err := is.InfoLoaderSaver.LoadInfoStructure()
 	if err != nil {
-		return err
+		is.updateErrorStatus(err)
+		return fmt.Errorf("error loading info structure: %v", err)
 	}
 	is.MetricMap = &metricMap
 	is.LabelMap = &labelMap
@@ -60,48 +79,90 @@ func (is *InfoStructure) BuildInformationStructure() error {
 	is.NlpToMetricMap = &nlpToMetricMap
 
 	// Fetch all metric names from Prometheus
+	is.updateProgressStage("Fetching existing metric names")
 	allMetricNames, err := is.QueryEngine.AllMetrics()
 	if err != nil {
+		is.updateErrorStatus(err)
 		return fmt.Errorf("error fetching all metric names: %v", err)
 	}
 
 	// Fetch all metric descriptions from Prometheus
+	is.updateProgressStage("Fetching existing metric descriptions")
 	allMetricDescriptions, err := is.QueryEngine.AllMetadata()
 	if err != nil {
+		is.updateErrorStatus(err)
 		return fmt.Errorf("error fetching all metric descriptions: %v", err)
 	}
 
 	// Update metricMap and get new metric synonyms
+	is.updateProgressStage("Updating existing metric map")
 	err = is.updateMetricMap(allMetricNames, allMetricDescriptions)
 	if err != nil {
+		is.updateErrorStatus(err)
 		return fmt.Errorf("error updating metric map: %v", err)
 	}
 
 	// Fetch all label names from Prometheus
+	is.updateProgressStage("Fetching existing label names")
 	allLabelNames, err := is.QueryEngine.AllLabels()
 	if err != nil {
+		is.updateErrorStatus(err)
 		return fmt.Errorf("error fetching all metric names: %v", err)
 	}
 
 	// Update labelMap and get new label synonyms
+	is.updateProgressStage("Fetching existing label map")
 	err = is.updateLabelMap(allLabelNames)
 	if err != nil {
+		is.updateErrorStatus(err)
 		return fmt.Errorf("error updating label map: %v", err)
 	}
 
 	// Batch query Prometheus for metric and label details
+	is.updateProgressStage("Updating existing metric label combinations map")
 	err = is.updateMetricLabelMapAndLabelValueMap(allMetricNames)
 	if err != nil {
+		is.updateErrorStatus(err)
 		return fmt.Errorf("error updating metric-label and label-value maps: %v", err)
 	}
 
 	// Save the updated information structure
+	is.updateProgressStage("Saving new info structure")
 	if err := is.InfoLoaderSaver.SaveInfoStructure(
 		*is.MetricMap, *is.LabelMap, *is.MetricLabelMap, *is.LabelValueMap, *is.NlpToMetricMap); err != nil {
+		is.updateErrorStatus(err)
 		return fmt.Errorf("error saving information structure: %v", err)
 	}
 
 	return nil
+}
+
+func (is *InfoStructure) updateProgressStage(stage string) {
+	log.Printf("%s\n", stage)
+	is.buildStatusLock.Lock()
+	is.buildStatus.ProgressStage = stage
+	is.buildStatusLock.Unlock()
+}
+
+func (is *InfoStructure) updateErrorStatus(err error) {
+	is.buildStatusLock.Lock()
+	is.buildStatus.Error = err
+	is.buildStatus.IsRunning = false
+	is.buildStatus.EndTime = time.Now()
+	is.buildStatusLock.Unlock()
+}
+
+// Status Checking Methods
+func (is *InfoStructure) GetBuildStatus() BuildStatus {
+	is.buildStatusLock.RLock()
+	defer is.buildStatusLock.RUnlock()
+	return is.buildStatus
+}
+
+func (is *InfoStructure) IsBuilding() bool {
+	is.buildStatusLock.RLock()
+	defer is.buildStatusLock.RUnlock()
+	return is.buildStatus.IsRunning
 }
 
 // updateMetricMap updates the metricMap with new metric names and their synonyms.
@@ -128,7 +189,7 @@ func (is *InfoStructure) updateMetricMap(allMetricNames []string,
 			newMetricMap[metric] = ""
 		}
 	}
-
+	fmt.Printf("%d", len(newMetricNames))
 	// Get metric synonyms (only for new metrics)
 	if len(newMetricNames) > 0 {
 		newMetricSynonyms, err := is.OpenAIClient.GetMetricSynonyms(newMetricMap)

@@ -55,6 +55,20 @@ func NewOpenAIClient() (*OpenAIClient, error) {
 	}, nil
 }
 
+func NewOpenAIClientWithKey(apiKey string) (*OpenAIClient, error) {
+	if apiKey == "" {
+		return nil, fmt.Errorf("open AI api key is empty")
+	}
+
+	return &OpenAIClient{
+		client:              openai.NewClient(apiKey),
+		llmSystemPrompt:     prompts.SystemPrompt,
+		processQueryPrompt:  prompts.ProcessQueryPrompt,
+		metricSynonymPrompt: prompts.MetricSynonymPrompt,
+		labelSynonymPrompt:  prompts.LabelSynonymPrompt,
+	}, nil
+}
+
 // getMetricSynonyms fetches metric synonyms using the OpenAI API.
 func (c *OpenAIClient) GetMetricSynonyms(metricMap map[string]string) (map[string][]string, error) {
 	batchSize := 20
@@ -73,7 +87,7 @@ func (c *OpenAIClient) GetMetricSynonyms(metricMap map[string]string) (map[strin
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling metric batch: %v", err)
 		}
-		// Use CreateCompletion instead of CreateChatCompletion
+
 		resp, err := c.client.CreateCompletion(
 			context.Background(),
 			openai.CompletionRequest{
