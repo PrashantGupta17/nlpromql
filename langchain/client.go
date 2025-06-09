@@ -9,7 +9,7 @@ import (
 	"github.com/prashantgupta17/nlpromql/llm"
 	"github.com/prashantgupta17/nlpromql/prompts"
 	"github.com/tmc/langchaingo/llms"
-	// Specific LLM model packages will be added by `go mod tidy` later if used in constructor/methods
+	// Dependencies for specific llms.Model implementations are managed in main.go
 )
 
 // LangChainClient implements the llm.LLMClient interface using LangChainGo.

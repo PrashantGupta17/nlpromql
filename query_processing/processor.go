@@ -4,12 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/prashantgupta17/nlpromql/info_structure" // Replace with the actual path
-	"github.com/prashantgupta17/nlpromql/llm"            // Replace with the actual path
+	"github.com/prashantgupta17/nlpromql/info_structure"
+	"github.com/prashantgupta17/nlpromql/llm"
 )
 
-// processUserQuery3 processes the user query to extract potential metrics and labels.
-// Changed client type to llm.LLMClient
+// processUserQuery3 helper function to call LLM for initial query processing.
 func processUserQuery3(client llm.LLMClient, userQuery string) (map[string]interface{}, error) {
 	possibleMatches, err := client.ProcessUserQuery(userQuery)
 	if err != nil {
@@ -18,17 +17,20 @@ func processUserQuery3(client llm.LLMClient, userQuery string) (map[string]inter
 	return possibleMatches, nil
 }
 
-// processUserQuery processes the user query using the information structure.
-// Changed client type to llm.LLMClient and return types to llm.RelevantMetricsMap, llm.RelevantLabelsMap
+// ProcessUserQuery processes a user's natural language query to extract structured information
+// relevant for forming PromQL queries. It uses an LLM to identify potential metrics, labels,
+// and values, then cross-references these with known information from Prometheus
+// (metricMap, labelMap, etc.) to build contextually relevant maps.
 func ProcessUserQuery(client llm.LLMClient, userQuery string, metricMap info_structure.MetricMap, labelMap info_structure.LabelMap,
 	metricLabelMap info_structure.MetricLabelMap, labelValueMap info_structure.LabelValueMap,
 	nlpToMetricMap info_structure.NlpToMetricMap) (map[string]interface{}, llm.RelevantMetricsMap, llm.RelevantLabelsMap, map[string]interface{}, error) {
 
 	possibleMatches, err := processUserQuery3(client, userQuery)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, fmt.Errorf("error processing user query via LLM: %w", err)
 	}
-	fmt.Println("Possible Matches:", possibleMatches)
+	// fmt.Println("Possible Matches from LLM:", possibleMatches) // Debug print
+
 	relevantMetrics := make(llm.RelevantMetricsMap)
 	relevantLabels := make(llm.RelevantLabelsMap)
 	relevantHistory := make(map[string]interface{})
@@ -47,8 +49,8 @@ func ProcessUserQuery(client llm.LLMClient, userQuery string, metricMap info_str
 		return values
 	}
 
-	// Process possible metric names to populate relevantMetrics
-	// llm.RelevantMetricsMap is map[string]map[string]llm.LabelContextDetail
+	// Process possible metric names to populate relevantMetrics.
+	// relevantMetrics structure: map[metricName]map[labelName]LabelContextDetail
 	if metricTokens, ok := possibleMatches["possible_metric_names"].([]interface{}); ok {
 		for _, metricToken := range metricTokens {
 			metricTokenStr, isString := metricToken.(string)
@@ -132,8 +134,8 @@ func ProcessUserQuery(client llm.LLMClient, userQuery string, metricMap info_str
 		}
 	}
 
-	// Process possible label names to populate relevantLabels
-	// llm.RelevantLabelsMap is map[string]llm.LabelContextDetail
+	// Process possible label names to populate relevantLabels.
+	// relevantLabels structure: map[labelName]LabelContextDetail
 	if labelTokens, ok := possibleMatches["possible_label_names"].([]interface{}); ok {
 		for _, labelToken := range labelTokens {
 			labelTokenStr, isString := labelToken.(string)
@@ -212,13 +214,14 @@ func ProcessUserQuery(client llm.LLMClient, userQuery string, metricMap info_str
 		}
 	}
 
-	fmt.Println("Relevant Metrics:", relevantMetrics)
-	fmt.Println("Relevant Labels:", relevantLabels)
-	fmt.Println("Relevant History:", relevantHistory)
+	// Debug prints for the final constructed relevance maps. Can be noisy.
+	// fmt.Println("Final Relevant Metrics:", relevantMetrics)
+	// fmt.Println("Final Relevant Labels:", relevantLabels)
+	// fmt.Println("Final Relevant History:", relevantHistory)
 	return possibleMatches, relevantMetrics, relevantLabels, relevantHistory, nil
 }
 
-// Helper function to check if a slice of interface{} contains any of the elements in a given string
+// containsAny checks if a slice of interface{} (expected to be strings) contains a specific string.
 func containsAny(slice []interface{}, str string) bool {
 	for _, item := range slice {
 		if itemStr, ok := item.(string); ok && itemStr == str {

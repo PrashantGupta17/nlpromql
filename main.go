@@ -8,96 +8,119 @@ import (
 	"strings"
 
 	"github.com/prashantgupta17/nlpromql/info_structure"
-	// Removed duplicate: "github.com/prashantgupta17/nlpromql/info_structure"
 	"github.com/prashantgupta17/nlpromql/langchain"
 	"github.com/prashantgupta17/nlpromql/llm"
-	"github.com/prashantgupta17/nlpromql/openai"
 	"github.com/prashantgupta17/nlpromql/prometheus"
 	"github.com/prashantgupta17/nlpromql/query_processing"
 	"github.com/prashantgupta17/nlpromql/server"
-	// lcLLMs "github.com/tmc/langchaingo/llms" // Removed unused import alias
+	"github.com/tmc/langchaingo/llms"
+	"github.com/tmc/langchaingo/llms/anthropic"
 	lcOpenai "github.com/tmc/langchaingo/llms/openai"
 )
 
+// TODO: Update README.md to document -llm_model_name, API key flags (-openai_api_key, -anthropic_api_key, -cohere_api_key), and their corresponding environment variables.
 func main() {
 	mode := flag.String("mode", "server", "Mode of operation: 'server' or 'chat'")
 	port := flag.String("port", "8080", "Port for the HTTP server (server mode only)")
-	llmProviderFlag := flag.String("llm_provider", "openai", "LLM provider to use: 'openai' or 'langchain'. Default is 'openai'.")
+	llmModelNameFlag := flag.String("llm_model_name", "openai/gpt-3.5-turbo", "The identifier for the LangChainGo LLM model to use (e.g., 'openai/gpt-3.5-turbo', 'anthropic/claude-2').")
+	openaiAPIKeyFlag := flag.String("openai_api_key", "", "OpenAI API key. Overrides OPENAI_API_KEY environment variable.")
+	anthropicAPIKeyFlag := flag.String("anthropic_api_key", "", "Anthropic API key. Overrides ANTHROPIC_API_KEY environment variable.")
+	_ = flag.String("cohere_api_key", "", "Cohere API key. Overrides COHERE_API_KEY environment variable.") // Defined, not used yet - assigned to blank identifier
 
 	flag.Parse()
 
-	var chosenLLMClient llm.LLMClient
-	var err error
-
-	// Determine LLM provider
-	provider := *llmProviderFlag
-	envProvider := os.Getenv("LLM_PROVIDER")
-
-	if provider == "openai" && envProvider != "" { // Default flag value, env var might override
-		provider = envProvider
+	// API Key Resolution (Flag > Env)
+	finalOpenAIAPIKey := *openaiAPIKeyFlag
+	if finalOpenAIAPIKey == "" {
+		finalOpenAIAPIKey = os.Getenv("OPENAI_API_KEY")
 	}
-	// If flag is set to non-default, it takes precedence over env var.
 
-	fmt.Printf("Using LLM provider: %s\n", provider)
+	finalAnthropicAPIKey := *anthropicAPIKeyFlag
+	if finalAnthropicAPIKey == "" {
+		finalAnthropicAPIKey = os.Getenv("ANTHROPIC_API_KEY")
+	}
 
-	switch provider {
-	case "openai":
-		oaiClient, oaiErr := openai.NewOpenAIClient()
-		if oaiErr != nil {
-			fmt.Println("Error initializing OpenAI client:", oaiErr)
+	// // finalCohereAPIKey := *cohereAPIKeyFlag // Defined, not used yet
+	// // finalCohereAPIKey := *cohereAPIKeyFlag // Commented out as it's not used yet
+	// // if finalCohereAPIKey == "" {
+	// // finalCohereAPIKey = os.Getenv("COHERE_API_KEY")
+	// // }
+
+
+	var lcModel llms.Model
+	var err error
+	modelName := *llmModelNameFlag
+
+	fmt.Printf("Attempting to initialize LLM model: %s\n", modelName)
+
+	switch {
+	case strings.HasPrefix(modelName, "openai/"):
+		if finalOpenAIAPIKey == "" {
+			fmt.Fprintln(os.Stderr, "OpenAI API key not provided via flag (-openai_api_key) or environment variable (OPENAI_API_KEY).")
 			os.Exit(1)
 		}
-		chosenLLMClient = oaiClient
-	case "langchain":
-		apiKey := os.Getenv("OPENAI_API_KEY") // Langchain's OpenAI model also needs this
-		if apiKey == "" {
-			fmt.Println("OPENAI_API_KEY environment variable not set, required for Langchain with OpenAI model")
+		modelID := strings.TrimPrefix(modelName, "openai/")
+		lcModel, err = lcOpenai.New(lcOpenai.WithToken(finalOpenAIAPIKey), lcOpenai.WithModel(modelID))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error initializing Langchain OpenAI model (%s): %v\n", modelID, err)
 			os.Exit(1)
 		}
-		lcLLM, lcErr := lcOpenai.New(lcOpenai.WithToken(apiKey))
-		if lcErr != nil {
-			fmt.Println("Error initializing Langchain OpenAI model:", lcErr)
+		fmt.Printf("Successfully initialized Langchain OpenAI model: %s\n", modelID)
+	case strings.HasPrefix(modelName, "anthropic/"):
+		if finalAnthropicAPIKey == "" {
+			fmt.Fprintln(os.Stderr, "Anthropic API key not provided via flag (-anthropic_api_key) or environment variable (ANTHROPIC_API_KEY).")
 			os.Exit(1)
 		}
-		lcClient := langchain.NewLangChainClient(lcLLM) // Assuming NewLangChainClient doesn't return an error for now or it's handled inside
-		chosenLLMClient = lcClient
+		modelID := strings.TrimPrefix(modelName, "anthropic/")
+		lcModel, err = anthropic.New(anthropic.WithModel(modelID)) // Assumes ANTHROPIC_API_KEY is read by New() or by http client
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error initializing Langchain Anthropic model (%s): %v\n", modelID, err)
+			os.Exit(1)
+		}
+		fmt.Printf("Successfully initialized Langchain Anthropic model: %s\n", modelID)
+	// TODO: Add case for "cohere/..." if/when Cohere is implemented
 	default:
-		fmt.Printf("Unknown LLM provider: %s. Supported providers are 'openai' or 'langchain'.\n", provider)
+		fmt.Fprintf(os.Stderr, "Unsupported LLM model name: %s. Please use format like 'openai/model-id' or 'anthropic/model-id'.\n", modelName)
 		os.Exit(1)
 	}
+
+	chosenLLMClient := langchain.NewLangChainClient(lcModel)
+	// NewLangChainClient currently doesn't return an error. If it could, error should be handled:
+	// if err != nil {
+	// fmt.Fprintf(os.Stderr, "Error creating LangChainClient: %v\n", err)
+	// os.Exit(1)
+	// }
 
 	// 3. Get Prometheus Credentials from Environment Variables
 	promURL, promUser, promPassword, err := getPrometheusCredentials()
 	if err != nil {
-		fmt.Println("Error getting Prometheus credentials:", err)
+		fmt.Fprintln(os.Stderr, "Error getting Prometheus credentials:", err)
 		os.Exit(1)
 	}
 
-	// (You'll need to fill in the actual Prometheus URL, username, and password)
 	promClient := prometheus.NewPrometheusConnect(promURL, promUser, promPassword)
 
 	infoBuilder, err := info_structure.NewInfoBuilder(promClient, chosenLLMClient, nil)
 	if err != nil {
-		fmt.Println("Error getting info builder:", err)
+		fmt.Fprintln(os.Stderr, "Error getting info builder:", err)
 		os.Exit(1)
 	}
 
 	err = infoBuilder.BuildInformationStructure()
 	if err != nil {
-		fmt.Println("Error building information structure:", err)
+		fmt.Fprintln(os.Stderr, "Error building information structure:", err)
 		os.Exit(1)
 	}
-	fmt.Println("Information Structure Built Successfully:")
-	fmt.Println("Metric Map:", len(infoBuilder.MetricMap.AllNames))
-	fmt.Println("Metric Map:", len(infoBuilder.LabelMap.AllNames))
-	fmt.Println("Metric Map:", len(*infoBuilder.MetricLabelMap))
-	fmt.Println("Metric Map:", len(*infoBuilder.LabelValueMap))
-	fmt.Println("Metric Map:", len(*infoBuilder.NlpToMetricMap))
+	fmt.Println("Information Structure Built Successfully.")
+	// Verbose printing of map lengths can be removed or put behind a debug flag if too noisy
+	// fmt.Println("Metric Map:", len(infoBuilder.MetricMap.AllNames))
+	// fmt.Println("Label Map:", len(infoBuilder.LabelMap.AllNames))
+	// fmt.Println("MetricLabelMap:", len(*infoBuilder.MetricLabelMap))
+	// fmt.Println("LabelValueMap:", len(*infoBuilder.LabelValueMap))
+	// fmt.Println("NlpToMetricMap:", len(*infoBuilder.NlpToMetricMap))
 
-	// 6. Main Loop for User Queries
-	// Chat mode is disabled for now
-	// runChatMode(openaiClient, metricMap, labelMap, metricLabelMap, labelValueMap, nlpToMetricMap)
 
+	// Main application logic based on mode
 	switch *mode {
 	case "server":
 		promqlServer := server.NewPromQLServer(
@@ -108,11 +131,13 @@ func main() {
 			*infoBuilder.LabelValueMap,
 			*infoBuilder.NlpToMetricMap,
 		)
+		fmt.Printf("Starting server on port %s...\n", *port)
 		if err := promqlServer.Start(*port); err != nil {
-			fmt.Println("Server error:", err)
+			fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
 			os.Exit(1)
 		}
 	case "chat":
+		fmt.Println("Entering chat mode...")
 		runChatMode(chosenLLMClient,
 			*infoBuilder.MetricMap,
 			*infoBuilder.LabelMap,
@@ -121,7 +146,7 @@ func main() {
 			*infoBuilder.NlpToMetricMap,
 		)
 	default:
-		fmt.Println("Invalid mode. Use 'server' or 'chat'.")
+		fmt.Fprintf(os.Stderr, "Invalid mode: %s. Use 'server' or 'chat'.\n", *mode)
 		os.Exit(1)
 	}
 }
@@ -140,28 +165,33 @@ func runChatMode(llmClient llm.LLMClient, metricMap info_structure.MetricMap, la
 			break
 		}
 
-		possibleMatches, relevantMetrics, relevantLabels, relevantHistory, err := query_processing.ProcessUserQuery(
+		_, relevantMetrics, relevantLabels, relevantHistory, err := query_processing.ProcessUserQuery(
 			llmClient, userQuery, metricMap, labelMap, metricLabelMap, labelValueMap, nlpToMetricMap,
 		)
 		if err != nil {
-			fmt.Println("Error processing user query:", err)
+			fmt.Fprintln(os.Stderr, "Error processing user query:", err)
 			continue
 		}
 
-		fmt.Println("Possible Matches:", possibleMatches)
-		fmt.Println("Relevant Metrics:", relevantMetrics)
-		fmt.Println("Relevant Labels:", relevantLabels)
-		fmt.Println("Relevant History:", relevantHistory)
+		// Debugging prints for relevance data can be verbose; consider a debug flag for these
+		// fmt.Println("Possible Matches:", possibleMatches)
+		// fmt.Println("Relevant Metrics:", relevantMetrics)
+		// fmt.Println("Relevant Labels:", relevantLabels)
+		// fmt.Println("Relevant History:", relevantHistory)
 
 		promqlOptions, err := llmClient.GetPromQLFromLLM(userQuery, relevantMetrics, relevantLabels, relevantHistory)
 		if err != nil {
-			fmt.Println("Error generating PromQL options:", err)
+			fmt.Fprintln(os.Stderr, "Error generating PromQL options:", err)
 			continue
 		}
 
-		fmt.Println("Generated PromQL options:")
-		for i, option := range promqlOptions {
-			fmt.Printf("%d. %s\n", i+1, option)
+		if len(promqlOptions) == 0 {
+			fmt.Println("No PromQL queries generated for the given input.")
+		} else {
+			fmt.Println("Generated PromQL options:")
+			for i, option := range promqlOptions {
+				fmt.Printf("%d. %s\n", i+1, option)
+			}
 		}
 	}
 }
@@ -176,9 +206,9 @@ func getPrometheusCredentials() (string, string, string, error) {
 	promUser := os.Getenv("PROMETHEUS_USER")
 	promPassword := os.Getenv("PROMETHEUS_PASSWORD")
 
-	// Check if both username and password are provided (optional)
-	if (promUser == "" && promPassword != "") || (promUser != "" && promPassword == "") {
-		return "", "", "", fmt.Errorf("either both PROMETHEUS_USER and PROMETHEUS_PASSWORD should be set, or neither")
+	// Optional: Check if both username and password are provided if one is present
+	if (promUser != "" && promPassword == "") || (promUser == "" && promPassword != "") {
+		return "", "", "", fmt.Errorf("both PROMETHEUS_USER and PROMETHEUS_PASSWORD must be set if one is provided, or neither")
 	}
 
 	return promURL, promUser, promPassword, nil
