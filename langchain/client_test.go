@@ -15,19 +15,37 @@ import (
 	"github.com/prashantgupta17/nlpromql/prompts" // Added for GetPromQLFromLLM test (prompts.SystemPrompt)
 )
 
+	"reflect" // Added for DeepEqual
+	"sync"    // Added for mutex in mock
+)
+
 // mockLLM is a mock implementation of the llms.Model interface for testing.
 type mockLLM struct {
-	CallFunc            func(ctx context.Context, prompt string, options ...llms.CallOption) (string, error)
 	GenerateContentFunc func(ctx context.Context, messages []llms.MessageContent, options ...llms.CallOption) (*llms.ContentResponse, error)
-	// Add other methods if they are called by the client, otherwise, they can be minimal implementations.
+
+	// For Call based methods like GetMetricSynonyms and GetLabelSynonyms
+	mu          sync.Mutex
+	CallInputs  []string // Stores the prompts received by Call
+	CallResponses map[string]string // Map prompt to a JSON response string
+	CallErrors    map[string]error  // Map prompt to an error
+	DefaultCallResponse string
+	DefaultCallError error
 }
 
 // Call implements the llms.Model interface.
 func (m *mockLLM) Call(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) {
-	if m.CallFunc != nil {
-		return m.CallFunc(ctx, prompt, options...)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.CallInputs = append(m.CallInputs, prompt)
+
+	if err, ok := m.CallErrors[prompt]; ok {
+		return "", err
 	}
-	return "", errors.New("CallFunc not implemented in mockLLM")
+	if resp, ok := m.CallResponses[prompt]; ok {
+		return resp, nil
+	}
+	return m.DefaultCallResponse, m.DefaultCallError
 }
 
 // GenerateContent implements the llms.Model interface.
@@ -35,34 +53,31 @@ func (m *mockLLM) GenerateContent(ctx context.Context, messages []llms.MessageCo
 	if m.GenerateContentFunc != nil {
 		return m.GenerateContentFunc(ctx, messages, options...)
 	}
+	// To satisfy the interface if only Call is being tested
 	return nil, errors.New("GenerateContentFunc not implemented in mockLLM")
 }
 
 // GetNumTokens implements the llms.Model interface - minimal implementation.
-// This might be part of an llms.LanguageModel interface or similar, depending on LangchainGo version.
-// For basic Model interface, it might not be strictly required if not used by the client.
-// Let's assume it's part of a broader interface that might be checked.
 func (m *mockLLM) GetNumTokens(text string) int {
-	return len(text) // Dummy implementation
+	return len(text)
 }
 
-// Getआईdentifiers implements the llms.Model interface - minimal implementation
+// GetIdentifiers implements the llms.Model interface - minimal implementation
 func (m *mockLLM) GetIdentifiers() []string {
 	return []string{"mockLLM"}
 }
 
-// GetType implements the llms.Model interface - minimal implementation
-// This is often part of schema.LLM or similar.
-// Assuming llms.Model is a simpler interface for now.
-// If the actual llms.Model includes this, we need it.
-// Based on tmc/langchaingo/llms/llms.go, Model does not have GetType.
-// However, specific model implementations might, or it might be part of a different interface.
-// For now, we'll omit it unless a compile error shows it's needed for llms.Model.
-
-// Ensure mockLLM implements llms.Model.
-// This line might cause a compile error if llms.Model is more complex than just Call and GenerateContent.
-// We will adjust based on that.
 var _ llms.Model = (*mockLLM)(nil)
+
+func (m *mockLLM) ResetCallTracking() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.CallInputs = []string{}
+	m.CallResponses = make(map[string]string)
+	m.CallErrors = make(map[string]error)
+	m.DefaultCallResponse = ""
+	m.DefaultCallError = nil
+}
 
 // TestNewLangChainClient tests the constructor for LangChainClient.
 func TestNewLangChainClient(t *testing.T) {
@@ -161,55 +176,98 @@ func TestLangChainClient_ProcessUserQuery(t *testing.T) {
 	}
 }
 
-func TestLangChainClient_GetLabelSynonyms(t *testing.T) {
+func TestLangChainClient_GetLabelSynonyms_Batching(t *testing.T) {
 	mock := &mockLLM{}
 	client := langchain.NewLangChainClient(mock)
 
+	// Helper to create expected prompt string
+	makePrompt := func(data interface{}) string {
+		jsonData, _ := json.MarshalIndent(data, "", "  ")
+		return fmt.Sprintf(prompts.LabelSynonymPrompt, string(jsonData))
+	}
+
+	batch1 := []string{"label1", "label2"}
+	batch2 := []string{"label3"}
+	prompt1 := makePrompt(batch1)
+	prompt2 := makePrompt(batch2)
+
 	tests := []struct {
-		name          string
-		labelNames    []string
-		mockResponse  string
-		mockError     error
-		expectedMap   map[string][]string
-		expectedError string
+		name           string
+		labelBatches   [][]string
+		mockResponses  map[string]string // map prompt to response
+		mockErrors     map[string]error  // map prompt to error
+		expectedMap    map[string][]string
+		expectedError  string
+		expectedCalls  int
+		expectedPrompts []string
 	}{
 		{
-			name:         "successful response",
-			labelNames:   []string{"label1", "label2"},
-			mockResponse: `{"label1": ["syn_a", "syn_b"], "label2": ["syn_c"]}`,
-			mockError:    nil,
-			expectedMap:  map[string][]string{"label1": {"syn_a", "syn_b"}, "label2": {"syn_c"}},
+			name:         "successful response with multiple batches",
+			labelBatches: [][]string{batch1, batch2},
+			mockResponses: map[string]string{
+				prompt1: `{"label1": ["syn_a"], "label2": ["syn_b"]}`,
+				prompt2: `{"label3": ["syn_c", "syn_d"]}`,
+			},
+			expectedMap: map[string][]string{
+				"label1": {"syn_a"},
+				"label2": {"syn_b"},
+				"label3": {"syn_c", "syn_d"},
+			},
+			expectedCalls: 2,
+			expectedPrompts: []string{prompt1, prompt2},
 		},
 		{
-			name:          "llm returns error",
-			labelNames:    []string{"label1"},
-			mockError:     errors.New("llm simulated error for labels"),
-			expectedError: "LangChain LLM call failed: llm simulated error for labels",
+			name:         "successful response with single batch",
+			labelBatches: [][]string{batch1},
+			mockResponses: map[string]string{
+				prompt1: `{"label1": ["syn_a"], "label2": ["syn_b"]}`,
+			},
+			expectedMap: map[string][]string{
+				"label1": {"syn_a"},
+				"label2": {"syn_b"},
+			},
+			expectedCalls: 1,
+			expectedPrompts: []string{prompt1},
 		},
 		{
-			name:          "malformed json response",
-			labelNames:    []string{"label1"},
-			mockResponse:  `{"label1": ["syn_a", "syn_b"]`, // Missing closing brace
-			mockError:     nil,
+			name:         "llm returns error for one batch",
+			labelBatches: [][]string{batch1, batch2},
+			mockResponses: map[string]string{
+				prompt1: `{"label1": ["syn_a"]}`,
+			},
+			mockErrors: map[string]error{
+				prompt2: errors.New("llm simulated error for batch2 labels"),
+			},
+			expectedError: "LangChain LLM call failed: llm simulated error for batch2 labels",
+			expectedCalls: 2, // Both calls should still be attempted
+			expectedPrompts: []string{prompt1, prompt2},
+		},
+		{
+			name:         "malformed json response for one batch",
+			labelBatches: [][]string{batch1, batch2},
+			mockResponses: map[string]string{
+				prompt1: `{"label1": ["syn_a"]`, // Malformed
+				prompt2: `{"label2": ["syn_b"]}`,
+			},
 			expectedError: "error unmarshalling LLM response",
+			expectedCalls: 2,
+			expectedPrompts: []string{prompt1, prompt2},
 		},
 		{
-			name:          "empty label names",
-			labelNames:    []string{},
-			mockResponse:  `{}`,
-			mockError:     nil,
-			expectedMap:   map[string][]string{},
+			name:         "empty label batches",
+			labelBatches: [][]string{},
+			expectedMap:  map[string][]string{},
+			expectedCalls: 0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock.CallFunc = func(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) {
-				// TODO: Could add prompt validation here if needed, e.g., check if labelNamesJSON is in prompt
-				return tt.mockResponse, tt.mockError
-			}
+			mock.ResetCallTracking()
+			mock.CallResponses = tt.mockResponses
+			mock.CallErrors = tt.mockErrors
 
-			resultMap, err := client.GetLabelSynonyms(tt.labelNames)
+			resultMap, err := client.GetLabelSynonyms(tt.labelBatches)
 
 			if tt.expectedError != "" {
 				if err == nil {
@@ -217,32 +275,32 @@ func TestLangChainClient_GetLabelSynonyms(t *testing.T) {
 				} else if !strings.Contains(err.Error(), tt.expectedError) {
 					t.Errorf("expected error containing '%s', got '%v'", tt.expectedError, err)
 				}
-				return // Don't check map if error is expected
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if !reflect.DeepEqual(resultMap, tt.expectedMap) {
+					t.Errorf("expected map %v, got %v", tt.expectedMap, resultMap)
+				}
 			}
 
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			mock.mu.Lock()
+			if len(mock.CallInputs) != tt.expectedCalls {
+				t.Errorf("expected %d LLM calls, got %d. Inputs: %v", tt.expectedCalls, len(mock.CallInputs), mock.CallInputs)
 			}
-
-			if len(resultMap) != len(tt.expectedMap) {
-				t.Errorf("expected map length %d, got %d. Result: %v", len(tt.expectedMap), len(resultMap), resultMap)
-			}
-			for key, expectedValues := range tt.expectedMap {
-				actualValues, ok := resultMap[key]
-				if !ok {
-					t.Errorf("expected key '%s' not found in result map", key)
-					continue
+			// Check if all expected prompts were called, order might vary due to goroutines
+			if tt.expectedPrompts != nil {
+				calledPrompts := make(map[string]bool)
+				for _, p := range mock.CallInputs {
+					calledPrompts[p] = true
 				}
-				if len(actualValues) != len(expectedValues) {
-					t.Errorf("for key '%s', expected %d values, got %d. Actual: %v", key, len(expectedValues), len(actualValues), actualValues)
-					continue
-				}
-				for i, v := range expectedValues {
-					if actualValues[i] != v {
-						t.Errorf("for key '%s' at index %d, expected value '%s', got '%s'", key, i, v, actualValues[i])
+				for _, ep := range tt.expectedPrompts {
+					if !calledPrompts[ep] {
+						t.Errorf("expected prompt was not called: %s", ep)
 					}
 				}
 			}
+			mock.mu.Unlock()
 		})
 	}
 }
@@ -402,54 +460,98 @@ func TestLangChainClient_GetPromQLFromLLM(t *testing.T) {
 }
 
 
-func TestLangChainClient_GetMetricSynonyms(t *testing.T) {
+func TestLangChainClient_GetMetricSynonyms_Batching(t *testing.T) {
 	mock := &mockLLM{}
 	client := langchain.NewLangChainClient(mock)
 
+	// Helper to create expected prompt string
+	makePrompt := func(data interface{}) string {
+		jsonData, _ := json.MarshalIndent(data, "", "  ")
+		return fmt.Sprintf(prompts.MetricSynonymPrompt, string(jsonData))
+	}
+
+	batch1 := map[string]string{"metric1": "desc1", "metric2": "desc2"}
+	batch2 := map[string]string{"metric3": "desc3"}
+	prompt1 := makePrompt(batch1)
+	prompt2 := makePrompt(batch2)
+
 	tests := []struct {
-		name          string
-		metricMap     map[string]string
-		mockResponse  string
-		mockError     error
-		expectedMap   map[string][]string
-		expectedError string
+		name            string
+		metricBatches   []map[string]string
+		mockResponses   map[string]string // map prompt to response
+		mockErrors      map[string]error  // map prompt to error
+		expectedMap     map[string][]string
+		expectedError   string
+		expectedCalls   int
+		expectedPrompts  []string
 	}{
 		{
-			name:         "successful response",
-			metricMap:    map[string]string{"metric1": "desc1", "metric2": "desc2"},
-			mockResponse: `{"metric1": ["syn1_1", "syn1_2"], "metric2": ["syn2_1"]}`,
-			mockError:    nil,
-			expectedMap:  map[string][]string{"metric1": {"syn1_1", "syn1_2"}, "metric2": {"syn2_1"}},
+			name:          "successful response with multiple batches",
+			metricBatches: []map[string]string{batch1, batch2},
+			mockResponses: map[string]string{
+				prompt1: `{"metric1": ["syn1_a"], "metric2": ["syn2_a"]}`,
+				prompt2: `{"metric3": ["syn3_a", "syn3_b"]}`,
+			},
+			expectedMap: map[string][]string{
+				"metric1": {"syn1_a"},
+				"metric2": {"syn2_a"},
+				"metric3": {"syn3_a", "syn3_b"},
+			},
+			expectedCalls: 2,
+			expectedPrompts: []string{prompt1, prompt2},
 		},
 		{
-			name:          "llm returns error",
-			metricMap:     map[string]string{"metric1": "desc1"},
-			mockError:     errors.New("llm simulated error"),
-			expectedError: "LangChain LLM call failed: llm simulated error",
+			name:          "successful response with single batch",
+			metricBatches: []map[string]string{batch1},
+			mockResponses: map[string]string{
+				prompt1: `{"metric1": ["syn1_a"], "metric2": ["syn2_a"]}`,
+			},
+			expectedMap: map[string][]string{
+				"metric1": {"syn1_a"},
+				"metric2": {"syn2_a"},
+			},
+			expectedCalls: 1,
+			expectedPrompts: []string{prompt1},
 		},
 		{
-			name:          "malformed json response",
-			metricMap:     map[string]string{"metric1": "desc1"},
-			mockResponse:  `{"metric1": ["syn1_1", "syn1_2"]`, // Missing closing brace
-			mockError:     nil,
-			expectedError: "error unmarshalling LLM response", // Error message should contain this
+			name:          "llm returns error for one batch",
+			metricBatches: []map[string]string{batch1, batch2},
+			mockResponses: map[string]string{
+				prompt1: `{"metric1": ["syn1_a"]}`,
+			},
+			mockErrors: map[string]error{
+				prompt2: errors.New("llm simulated error for batch2 metrics"),
+			},
+			expectedError: "LangChain LLM call failed: llm simulated error for batch2 metrics",
+			expectedCalls: 2,
+			expectedPrompts: []string{prompt1, prompt2},
 		},
 		{
-			name:          "empty metric map",
-			metricMap:     map[string]string{},
-			mockResponse:  `{}`,
-			mockError:     nil,
+			name:          "malformed json response for one batch",
+			metricBatches: []map[string]string{batch1, batch2},
+			mockResponses: map[string]string{
+				prompt1: `{"metric1": ["syn1_a"]`, // Malformed
+				prompt2: `{"metric2": ["syn2_a"]}`,
+			},
+			expectedError: "error unmarshalling LLM response",
+			expectedCalls: 2,
+			expectedPrompts: []string{prompt1, prompt2},
+		},
+		{
+			name:          "empty metric batches",
+			metricBatches: []map[string]string{},
 			expectedMap:   map[string][]string{},
+			expectedCalls: 0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock.CallFunc = func(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) {
-				return tt.mockResponse, tt.mockError
-			}
+			mock.ResetCallTracking()
+			mock.CallResponses = tt.mockResponses
+			mock.CallErrors = tt.mockErrors
 
-			resultMap, err := client.GetMetricSynonyms(tt.metricMap)
+			resultMap, err := client.GetMetricSynonyms(tt.metricBatches)
 
 			if tt.expectedError != "" {
 				if err == nil {
@@ -457,32 +559,32 @@ func TestLangChainClient_GetMetricSynonyms(t *testing.T) {
 				} else if !strings.Contains(err.Error(), tt.expectedError) {
 					t.Errorf("expected error containing '%s', got '%v'", tt.expectedError, err)
 				}
-				return // Don't check map if error is expected
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if !reflect.DeepEqual(resultMap, tt.expectedMap) {
+					t.Errorf("expected map %v, got %v", tt.expectedMap, resultMap)
+				}
 			}
 
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+			mock.mu.Lock()
+			if len(mock.CallInputs) != tt.expectedCalls {
+				t.Errorf("expected %d LLM calls, got %d. Inputs: %v", tt.expectedCalls, len(mock.CallInputs), mock.CallInputs)
 			}
-
-			if len(resultMap) != len(tt.expectedMap) {
-				t.Errorf("expected map length %d, got %d. Result: %v", len(tt.expectedMap), len(resultMap), resultMap)
-			}
-			for key, expectedValues := range tt.expectedMap {
-				actualValues, ok := resultMap[key]
-				if !ok {
-					t.Errorf("expected key '%s' not found in result map", key)
-					continue
+			// Check if all expected prompts were called, order might vary due to goroutines
+			if tt.expectedPrompts != nil {
+				calledPrompts := make(map[string]bool)
+				for _, p := range mock.CallInputs {
+					calledPrompts[p] = true
 				}
-				if len(actualValues) != len(expectedValues) {
-					t.Errorf("for key '%s', expected %d values, got %d. Actual: %v", key, len(expectedValues), len(actualValues), actualValues)
-					continue
-				}
-				for i, v := range expectedValues {
-					if actualValues[i] != v {
-						t.Errorf("for key '%s' at index %d, expected value '%s', got '%s'", key, i, v, actualValues[i])
+				for _, ep := range tt.expectedPrompts {
+					if !calledPrompts[ep] {
+						t.Errorf("expected prompt was not called: %s", ep)
 					}
 				}
 			}
+			mock.mu.Unlock()
 		})
 	}
 }

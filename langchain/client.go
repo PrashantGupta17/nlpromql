@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/prashantgupta17/nlpromql/llm"
 	"github.com/prashantgupta17/nlpromql/prompts"
@@ -25,71 +26,147 @@ func NewLangChainClient(model llms.Model) *LangChainClient {
 	}
 }
 
-// GetMetricSynonyms gets synonyms for the given metrics from the LLM.
-func (c *LangChainClient) GetMetricSynonyms(metricMap map[string]string) (map[string][]string, error) {
+// GetMetricSynonyms gets synonyms for the given metrics from the LLM in batches.
+func (c *LangChainClient) GetMetricSynonyms(metricBatches []map[string]string) (map[string][]string, error) {
 	if c.llmModel == nil {
 		return nil, errors.New("LangChain LLM model is not initialized")
 	}
 
-	metricMapJSON, err := json.MarshalIndent(metricMap, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("error marshalling metricMap: %w", err)
+	type result struct {
+		synonyms map[string][]string
+		err      error
 	}
 
-	prompt := fmt.Sprintf(prompts.MetricSynonymPrompt, string(metricMapJSON))
+	numBatches := len(metricBatches)
+	resultsChan := make(chan result, numBatches)
+	var wg sync.WaitGroup
 
-	// TODO: Adjust for potential differences in how various models handle chat/completion and system prompts.
-	// This is a simplified example assuming a completion-style model.
-	// For chat models, the call would be llms.GenerateFromSinglePrompt or similar with specific message structuring.
+	for _, batch := range metricBatches {
+		wg.Add(1)
+		go func(metricMap map[string]string) {
+			defer wg.Done()
 
-	// Using llms.Call directly for simplicity, assuming the model supports simple text in/out.
-	// More complex models/scenarios might require llms.CreateChatCompletion or llms.GenerateContent.
-	// Corrected: llms.Call is a method on the model instance: c.llmModel.Call
-	response, err := c.llmModel.Call(context.Background(), prompt) // Removed c.llmModel from args, added relevant llms.CallOptions if needed
-	if err != nil {
-		return nil, fmt.Errorf("LangChain LLM call failed: %w", err)
+			metricMapJSON, err := json.MarshalIndent(metricMap, "", "  ")
+			if err != nil {
+				resultsChan <- result{nil, fmt.Errorf("error marshalling metricMap: %w", err)}
+				return
+			}
+
+			prompt := fmt.Sprintf(prompts.MetricSynonymPrompt, string(metricMapJSON))
+			response, err := c.llmModel.Call(context.Background(), prompt)
+			if err != nil {
+				resultsChan <- result{nil, fmt.Errorf("LangChain LLM call failed: %w", err)}
+				return
+			}
+
+			var synonymsBatch map[string][]string
+			if err := json.Unmarshal([]byte(response), &synonymsBatch); err != nil {
+				resultsChan <- result{nil, fmt.Errorf("error unmarshalling LLM response: %w. Raw response: %s", err, response)}
+				return
+			}
+			resultsChan <- result{synonymsBatch, nil}
+		}(batch)
 	}
 
-	var synonyms map[string][]string
-	if err := json.Unmarshal([]byte(response), &synonyms); err != nil {
-		// Fallback: if the response is not a valid JSON map, wrap it in a "response" key.
-		// This handles cases where the LLM might return a raw string or a list not directly unmarshallable.
-		// More robust error handling and response parsing might be needed here based on observed LLM outputs.
-		// e.g. some models might wrap their json output in ```json ... ```
-		// For now, we'll try to unmarshal as is, and if it fails, assume it's a string that needs to be wrapped,
-		// or it's a malformed JSON.
-		// A more sophisticated approach would involve inspecting the string, trying to clean it, etc.
-		return nil, fmt.Errorf("error unmarshalling LLM response: %w. Raw response: %s", err, response)
+	go func() {
+		wg.Wait()
+		close(resultsChan)
+	}()
+
+	consolidatedSynonyms := make(map[string][]string)
+	var firstError error
+
+	for res := range resultsChan {
+		if res.err != nil {
+			if firstError == nil {
+				firstError = res.err
+			}
+			// Continue processing other results to potentially gather partial data,
+			// but the first error will be returned.
+		} else if res.synonyms != nil {
+			for key, value := range res.synonyms {
+				consolidatedSynonyms[key] = append(consolidatedSynonyms[key], value...)
+				// TODO: Consider if duplicate synonyms across batches should be handled (e.g., deduped).
+				// For now, appending all.
+			}
+		}
 	}
 
-	return synonyms, nil
+	if firstError != nil {
+		return nil, firstError // Return the first error encountered
+	}
+
+	return consolidatedSynonyms, nil
 }
 
-// GetLabelSynonyms gets synonyms for the given labels from the LLM.
-func (c *LangChainClient) GetLabelSynonyms(labelNames []string) (map[string][]string, error) {
+// GetLabelSynonyms gets synonyms for the given labels from the LLM in batches.
+func (c *LangChainClient) GetLabelSynonyms(labelBatches [][]string) (map[string][]string, error) {
 	if c.llmModel == nil {
 		return nil, errors.New("LangChain LLM model is not initialized")
 	}
 
-	labelNamesJSON, err := json.MarshalIndent(labelNames, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("error marshalling labelNames: %w", err)
+	type result struct {
+		synonyms map[string][]string
+		err      error
 	}
 
-	prompt := fmt.Sprintf(prompts.LabelSynonymPrompt, string(labelNamesJSON))
+	numBatches := len(labelBatches)
+	resultsChan := make(chan result, numBatches)
+	var wg sync.WaitGroup
 
-	// Corrected: llms.Call is a method on the model instance: c.llmModel.Call
-	response, err := c.llmModel.Call(context.Background(), prompt) // Removed c.llmModel from args
-	if err != nil {
-		return nil, fmt.Errorf("LangChain LLM call failed: %w", err)
+	for _, batch := range labelBatches {
+		wg.Add(1)
+		go func(labelNames []string) {
+			defer wg.Done()
+
+			labelNamesJSON, err := json.MarshalIndent(labelNames, "", "  ")
+			if err != nil {
+				resultsChan <- result{nil, fmt.Errorf("error marshalling labelNames: %w", err)}
+				return
+			}
+
+			prompt := fmt.Sprintf(prompts.LabelSynonymPrompt, string(labelNamesJSON))
+			response, err := c.llmModel.Call(context.Background(), prompt)
+			if err != nil {
+				resultsChan <- result{nil, fmt.Errorf("LangChain LLM call failed: %w", err)}
+				return
+			}
+
+			var synonymsBatch map[string][]string
+			if err := json.Unmarshal([]byte(response), &synonymsBatch); err != nil {
+				resultsChan <- result{nil, fmt.Errorf("error unmarshalling LLM response: %w. Raw response: %s", err, response)}
+				return
+			}
+			resultsChan <- result{synonymsBatch, nil}
+		}(batch)
 	}
 
-	var synonyms map[string][]string
-	if err := json.Unmarshal([]byte(response), &synonyms); err != nil {
-		return nil, fmt.Errorf("error unmarshalling LLM response: %w. Raw response: %s", err, response)
+	go func() {
+		wg.Wait()
+		close(resultsChan)
+	}()
+
+	consolidatedSynonyms := make(map[string][]string)
+	var firstError error
+
+	for res := range resultsChan {
+		if res.err != nil {
+			if firstError == nil {
+				firstError = res.err
+			}
+		} else if res.synonyms != nil {
+			for key, value := range res.synonyms {
+				consolidatedSynonyms[key] = append(consolidatedSynonyms[key], value...)
+				// TODO: Deduplication of synonyms if needed
+			}
+		}
 	}
 
-	return synonyms, nil
+	if firstError != nil {
+		return nil, firstError
+	}
+
+	return consolidatedSynonyms, nil
 }
 
 // ProcessUserQuery processes the user query and returns relevant information.
