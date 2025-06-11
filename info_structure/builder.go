@@ -96,7 +96,7 @@ func (is *InfoStructure) BuildInformationStructure() error {
 
 	// Update metricMap and get new metric synonyms
 	is.updateProgressStage("Updating existing metric map")
-	err = is.updateMetricMap(allMetricNames, allMetricDescriptions)
+	err = is.UpdateMetricMap(allMetricNames, allMetricDescriptions)
 	if err != nil {
 		is.updateErrorStatus(err)
 		return fmt.Errorf("error updating metric map: %v", err)
@@ -112,7 +112,7 @@ func (is *InfoStructure) BuildInformationStructure() error {
 
 	// Update labelMap and get new label synonyms
 	is.updateProgressStage("Fetching existing label map")
-	err = is.updateLabelMap(allLabelNames)
+	err = is.UpdateLabelMap(allLabelNames)
 	if err != nil {
 		is.updateErrorStatus(err)
 		return fmt.Errorf("error updating label map: %v", err)
@@ -203,18 +203,18 @@ func (is *InfoStructure) UpdateMetricMap(allMetricNames []string,
 	const metricBatchSize = 10
 	metricBatches := []map[string]string{}
 	currentBatch := make(map[string]string)
-	countInCurrentBatch := 0
 
-	for metricName, description := range metricsToQueryForSynonyms {
+	// Iterate over the slice newMetricNames for deterministic order for batching
+	for _, metricName := range newMetricNames {
+		description := metricsToQueryForSynonyms[metricName] // Get description from the pre-filtered map
 		currentBatch[metricName] = description
-		countInCurrentBatch++
-		if countInCurrentBatch >= metricBatchSize {
+
+		if len(currentBatch) >= metricBatchSize {
 			metricBatches = append(metricBatches, currentBatch)
-			currentBatch = make(map[string]string)
-			countInCurrentBatch = 0
+			currentBatch = make(map[string]string) // New map for next batch
 		}
 	}
-	if countInCurrentBatch > 0 {
+	if len(currentBatch) > 0 { // If there's anything left in currentBatch
 		metricBatches = append(metricBatches, currentBatch)
 	}
 

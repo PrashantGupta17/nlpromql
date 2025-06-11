@@ -13,17 +13,16 @@ import (
 	"encoding/json" // Added for GetPromQLFromLLM test
 	"github.com/prashantgupta17/nlpromql/llm" // Added for GetPromQLFromLLM test (llm.RelevantMetricsMap etc.)
 	"github.com/prashantgupta17/nlpromql/prompts" // Added for GetPromQLFromLLM test (prompts.SystemPrompt)
-)
-
 	"reflect" // Added for DeepEqual
 	"sync"    // Added for mutex in mock
 )
 
 // mockLLM is a mock implementation of the llms.Model interface for testing.
 type mockLLM struct {
+	CallFunc            func(ctx context.Context, prompt string, options ...llms.CallOption) (string, error) // Restored for tests like ProcessUserQuery
 	GenerateContentFunc func(ctx context.Context, messages []llms.MessageContent, options ...llms.CallOption) (*llms.ContentResponse, error)
 
-	// For Call based methods like GetMetricSynonyms and GetLabelSynonyms
+	// For Call based methods like GetMetricSynonyms and GetLabelSynonyms (batch processing tests)
 	mu          sync.Mutex
 	CallInputs  []string // Stores the prompts received by Call
 	CallResponses map[string]string // Map prompt to a JSON response string
@@ -37,8 +36,13 @@ func (m *mockLLM) Call(ctx context.Context, prompt string, options ...llms.CallO
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.CallInputs = append(m.CallInputs, prompt)
+	// Prioritize specific CallFunc if provided (for older tests or simple mocks)
+	if m.CallFunc != nil {
+		return m.CallFunc(ctx, prompt, options...)
+	}
 
+	// New logic for batch tests using prompt mapping
+	m.CallInputs = append(m.CallInputs, prompt)
 	if err, ok := m.CallErrors[prompt]; ok {
 		return "", err
 	}

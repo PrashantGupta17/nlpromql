@@ -7,6 +7,7 @@ import (
 
 	"github.com/prashantgupta17/nlpromql/info_structure"
 	"github.com/prashantgupta17/nlpromql/llm"
+	"github.com/prashantgupta17/nlpromql/prometheus" // Added for prometheus.Metric type
 )
 
 // --- Mocks ---
@@ -58,7 +59,7 @@ type MockQueryEngine_BuilderTest struct {
 	AllMetricsFunc    func() ([]string, error)
 	AllMetadataFunc   func() (map[string]string, error)
 	AllLabelsFunc     func() ([]string, error)
-	CustomQueryFunc   func(query string) ([]info_structure.PrometheusResponse, error)
+	CustomQueryFunc   func(query string) ([]prometheus.Metric, error)
 }
 
 func (m *MockQueryEngine_BuilderTest) AllMetrics() ([]string, error) {
@@ -82,35 +83,35 @@ func (m *MockQueryEngine_BuilderTest) AllLabels() ([]string, error) {
 	return []string{}, nil
 }
 
-func (m *MockQueryEngine_BuilderTest) CustomQuery(query string) ([]info_structure.PrometheusResponse, error) {
+func (m *MockQueryEngine_BuilderTest) CustomQuery(query string) ([]prometheus.Metric, error) {
 	if m.CustomQueryFunc != nil {
 		return m.CustomQueryFunc(query)
 	}
-	return []info_structure.PrometheusResponse{}, nil
+	return []prometheus.Metric{}, nil
 }
 
 var _ info_structure.QueryEngine = (*MockQueryEngine_BuilderTest)(nil)
 
 // MockInfoLoaderSaver for builder tests
 type MockInfoLoaderSaver_BuilderTest struct {
-	LoadInfoStructureFunc func() (info_structure.MetricMapType, info_structure.LabelMapType, info_structure.MetricLabelMapType, info_structure.LabelValueMapType, info_structure.NlpToMetricMapType, error)
-	SaveInfoStructureFunc func(metricMap info_structure.MetricMapType, labelMap info_structure.LabelMapType, metricLabelMap info_structure.MetricLabelMapType, labelValueMap info_structure.LabelValueMapType, nlpToMetricMap info_structure.NlpToMetricMapType) error
+	LoadInfoStructureFunc func() (info_structure.MetricMap, info_structure.LabelMap, info_structure.MetricLabelMap, info_structure.LabelValueMap, info_structure.NlpToMetricMap, error)
+	SaveInfoStructureFunc func(metricMap info_structure.MetricMap, labelMap info_structure.LabelMap, metricLabelMap info_structure.MetricLabelMap, labelValueMap info_structure.LabelValueMap, nlpToMetricMap info_structure.NlpToMetricMap) error
 }
 
-func (m *MockInfoLoaderSaver_BuilderTest) LoadInfoStructure() (info_structure.MetricMapType, info_structure.LabelMapType, info_structure.MetricLabelMapType, info_structure.LabelValueMapType, info_structure.NlpToMetricMapType, error) {
+func (m *MockInfoLoaderSaver_BuilderTest) LoadInfoStructure() (info_structure.MetricMap, info_structure.LabelMap, info_structure.MetricLabelMap, info_structure.LabelValueMap, info_structure.NlpToMetricMap, error) {
 	if m.LoadInfoStructureFunc != nil {
 		return m.LoadInfoStructureFunc()
 	}
 	// Return empty, initialized maps to avoid nil pointer issues in the functions under test
-	return info_structure.MetricMapType{Map: make(map[string]map[string]struct{}), AllNames: make(map[string]struct{})},
-		info_structure.LabelMapType{Map: make(map[string]map[string]struct{}), AllNames: make(map[string]struct{})},
-		make(info_structure.MetricLabelMapType),
-		make(info_structure.LabelValueMapType),
-		make(info_structure.NlpToMetricMapType),
+	return info_structure.MetricMap{Map: make(map[string]map[string]struct{}), AllNames: make(map[string]struct{})},
+		info_structure.LabelMap{Map: make(map[string]map[string]struct{}), AllNames: make(map[string]struct{})},
+		make(info_structure.MetricLabelMap),
+		make(info_structure.LabelValueMap),
+		make(info_structure.NlpToMetricMap),
 		nil
 }
 
-func (m *MockInfoLoaderSaver_BuilderTest) SaveInfoStructure(metricMap info_structure.MetricMapType, labelMap info_structure.LabelMapType, metricLabelMap info_structure.MetricLabelMapType, labelValueMap info_structure.LabelValueMapType, nlpToMetricMap info_structure.NlpToMetricMapType) error {
+func (m *MockInfoLoaderSaver_BuilderTest) SaveInfoStructure(metricMap info_structure.MetricMap, labelMap info_structure.LabelMap, metricLabelMap info_structure.MetricLabelMap, labelValueMap info_structure.LabelValueMap, nlpToMetricMap info_structure.NlpToMetricMap) error {
 	if m.SaveInfoStructureFunc != nil {
 		return m.SaveInfoStructureFunc(metricMap, labelMap, metricLabelMap, labelValueMap, nlpToMetricMap)
 	}
@@ -179,18 +180,35 @@ func TestUpdateMetricMap_Batching(t *testing.T) {
 			expectLLMCall: true,
 		},
 		{
-			name:                   "some new, some existing metrics",
-			existingMetricNames:    map[string]struct{}{"metric_existing_1": {}, "metric_existing_2": {}},
-			allMetricNamesFromProm: append([]string{"metric_existing_1", "metric_new_1", "metric_existing_2", "metric_new_2"}, generateMetrics(metricBatchSize-2, 2)...), // 2 new + (batchsize-2) new = batchsize new
-			allMetricDescriptions: mergeMaps(
-				map[string]string{"metric_existing_1": "desc_e1", "metric_new_1": "desc_n1", "metric_existing_2": "desc_e2", "metric_new_2": "desc_n2"},
-				generateMetricDescs(metricBatchSize-2, 2, "metric_new_"),
+			name:                "some new, some existing metrics",
+			existingMetricNames: map[string]struct{}{"metric_existing_0": {}}, // metric_existing_0 exists
+			allMetricNamesFromProm: append(
+				[]string{"metric_existing_0", "metric_new_1"}, // metric_new_1 is new
+				generateMetrics(metricBatchSize-1, 2, "metric_new_")..., // metric_new_2, ..., metric_new_BATCHSIZE are new
 			),
+			allMetricDescriptions: func() map[string]string {
+				desc := map[string]string{
+					"metric_existing_0": "desc_e0",
+					"metric_new_1":      "desc_n1", // Specific description
+				}
+				// Add descriptions for metric_new_2 to metric_new_BATCHSIZE
+				for i := 2; i <= metricBatchSize; i++ {
+					name := fmt.Sprintf("metric_new_%d", i)
+					desc[name] = fmt.Sprintf("description for %s", name)
+				}
+				return desc
+			}(),
 			expectedBatches: []map[string]string{
-				mergeMaps(
-					map[string]string{"metric_new_1": "desc_n1", "metric_new_2": "desc_n2"},
-					generateMetricDescs(metricBatchSize-2, 2, "metric_new_"),
-				),
+				func() map[string]string {
+					batch := map[string]string{
+						"metric_new_1": "desc_n1",
+					}
+					for i := 2; i <= metricBatchSize; i++ {
+						name := fmt.Sprintf("metric_new_%d", i)
+						batch[name] = fmt.Sprintf("description for %s", name)
+					}
+					return batch
+				}(),
 			},
 			expectLLMCall: true,
 		},
@@ -205,16 +223,34 @@ func TestUpdateMetricMap_Batching(t *testing.T) {
 			}
 			mockLoaderSaver := &MockInfoLoaderSaver_BuilderTest{}
 
-			is, _ := info_structure.NewInfoBuilder(mockQueryEngine, mockLLM, mockLoaderSaver)
+			is, err := info_structure.NewInfoBuilder(mockQueryEngine, mockLLM, mockLoaderSaver)
+			if err != nil {
+				t.Fatalf("NewInfoBuilder returned an unexpected error: %v", err)
+			}
+			if is == nil {
+				t.Fatalf("NewInfoBuilder returned a nil InfoStructure instance")
+			}
+
+			// Manually initialize maps as BuildInformationStructure would do
+			metricMap, labelMap, metricLabelMap, labelValueMap, nlpToMetricMap, loadErr := mockLoaderSaver.LoadInfoStructure()
+			if loadErr != nil {
+				t.Fatalf("mockLoaderSaver.LoadInfoStructure() returned an error: %v", loadErr)
+			}
+			is.MetricMap = &metricMap
+			is.LabelMap = &labelMap
+			is.MetricLabelMap = &metricLabelMap
+			is.LabelValueMap = &labelValueMap
+			is.NlpToMetricMap = &nlpToMetricMap
+
+			if is.MetricMap == nil {
+				t.Fatalf("is.MetricMap is nil after manual initialization")
+			}
 
 			// Pre-populate existing metrics
 			is.MetricMap.AllNames = tt.existingMetricNames
-			if is.MetricMap.Map == nil && len(tt.existingMetricNames) > 0 { // Ensure map is initialized if AllNames is
-				is.MetricMap.Map = make(map[string]map[string]struct{})
-			}
+			// is.MetricMap.Map is initialized by the mockLoaderSaver.LoadInfoStructure
 
-
-			err := is.UpdateMetricMap(tt.allMetricNamesFromProm, tt.allMetricDescriptions)
+			err = is.UpdateMetricMap(tt.allMetricNamesFromProm, tt.allMetricDescriptions)
 			if err != nil {
 				t.Fatalf("UpdateMetricMap returned an unexpected error: %v", err)
 			}
@@ -226,14 +262,27 @@ func TestUpdateMetricMap_Batching(t *testing.T) {
 				return
 			}
 
-			if !reflect.DeepEqual(mockLLM.ReceivedMetricBatches, tt.expectedBatches) {
-				t.Errorf("GetMetricSynonyms called with incorrect batches.\nExpected: %v\nGot:      %v", tt.expectedBatches, mockLLM.ReceivedMetricBatches)
-				// For detailed diff:
-				if len(mockLLM.ReceivedMetricBatches) == len(tt.expectedBatches) {
-					for i := range tt.expectedBatches {
-						if !reflect.DeepEqual(mockLLM.ReceivedMetricBatches[i], tt.expectedBatches[i]) {
-							t.Errorf("Mismatch in batch #%d.\nExpected: %v\nGot:      %v", i, tt.expectedBatches[i], mockLLM.ReceivedMetricBatches[i])
+			// Compare batches in an order-insensitive way for the outer slice
+			if len(mockLLM.ReceivedMetricBatches) != len(tt.expectedBatches) {
+				t.Errorf("Expected %d batches, got %d.\nExpected: %v\nGot:      %v", len(tt.expectedBatches), len(mockLLM.ReceivedMetricBatches), tt.expectedBatches, mockLLM.ReceivedMetricBatches)
+			} else {
+				foundMatch := make([]bool, len(tt.expectedBatches))
+				for _, receivedBatch := range mockLLM.ReceivedMetricBatches {
+					matchFoundForThisReceivedBatch := false
+					for i, expectedBatch := range tt.expectedBatches {
+						if !foundMatch[i] && reflect.DeepEqual(receivedBatch, expectedBatch) {
+							foundMatch[i] = true
+							matchFoundForThisReceivedBatch = true
+							break
 						}
+					}
+					if !matchFoundForThisReceivedBatch {
+						t.Errorf("Received an unexpected batch or a duplicate batch: %v", receivedBatch)
+					}
+				}
+				for i, found := range foundMatch {
+					if !found {
+						t.Errorf("Expected batch was not found: %v", tt.expectedBatches[i])
 					}
 				}
 			}
@@ -296,14 +345,35 @@ func TestUpdateLabelMap_Batching(t *testing.T) {
 			}
 			mockLoaderSaver := &MockInfoLoaderSaver_BuilderTest{}
 
-			is, _ := info_structure.NewInfoBuilder(mockQueryEngine, mockLLM, mockLoaderSaver)
-			is.LabelMap.AllNames = tt.existingLabelNames
-			if is.LabelMap.Map == nil && len(tt.existingLabelNames) > 0 {
-				is.LabelMap.Map = make(map[string]map[string]struct{})
+			is, err := info_structure.NewInfoBuilder(mockQueryEngine, mockLLM, mockLoaderSaver)
+			if err != nil {
+				t.Fatalf("NewInfoBuilder returned an unexpected error: %v", err)
+			}
+			if is == nil {
+				t.Fatalf("NewInfoBuilder returned a nil InfoStructure instance")
 			}
 
+			// Manually initialize maps as BuildInformationStructure would do
+			// No need to call LoadInfoStructure again if already done for the same 'is' instance
+			// but for isolated test functions, this is fine. If tests were methods on a suite, setup could be shared.
+			metricMap, labelMap, metricLabelMap, labelValueMap, nlpToMetricMap, loadErr := mockLoaderSaver.LoadInfoStructure()
+			if loadErr != nil {
+				t.Fatalf("mockLoaderSaver.LoadInfoStructure() returned an error: %v", loadErr)
+			}
+			is.MetricMap = &metricMap // Required by UpdateLabelMap if it shared logic or touched MetricMap
+			is.LabelMap = &labelMap
+			is.MetricLabelMap = &metricLabelMap
+			is.LabelValueMap = &labelValueMap
+			is.NlpToMetricMap = &nlpToMetricMap
 
-			err := is.UpdateLabelMap(tt.allLabelNamesFromProm)
+			if is.LabelMap == nil {
+				t.Fatalf("is.LabelMap is nil after manual initialization")
+			}
+
+			is.LabelMap.AllNames = tt.existingLabelNames
+			// is.LabelMap.Map is initialized by the mockLoaderSaver.LoadInfoStructure
+
+			err = is.UpdateLabelMap(tt.allLabelNamesFromProm)
 			if err != nil {
 				t.Fatalf("UpdateLabelMap returned an unexpected error: %v", err)
 			}
@@ -324,10 +394,14 @@ func TestUpdateLabelMap_Batching(t *testing.T) {
 
 // --- Test Helpers ---
 
-func generateMetrics(count, offset int) []string {
+func generateMetrics(count, offset int, prefixOptions ...string) []string {
+	prefix := "metric"
+	if len(prefixOptions) > 0 && prefixOptions[0] != "" {
+		prefix = prefixOptions[0]
+	}
 	metrics := make([]string, count)
 	for i := 0; i < count; i++ {
-		metrics[i] = fmt.Sprintf("metric%d", i+offset)
+		metrics[i] = fmt.Sprintf("%s%d", prefix, i+offset)
 	}
 	return metrics
 }

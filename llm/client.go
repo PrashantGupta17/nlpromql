@@ -18,8 +18,8 @@ type RelevantLabelsMap map[string]LabelContextDetail
 // LLMClient defines the interface for interacting with an LLM.
 // The GetPromQLFromLLM method will now use the new map types.
 type LLMClient interface {
-	GetMetricSynonyms(metricMap map[string]string) (map[string][]string, error)
-	GetLabelSynonyms(labelNames []string) (map[string][]string, error)
+	GetMetricSynonyms(metricBatches []map[string]string) (map[string][]string, error)
+	GetLabelSynonyms(labelBatches [][]string) (map[string][]string, error)
 	ProcessUserQuery(userQuery string) (map[string]interface{}, error)
 	GetPromQLFromLLM(userQuery string, relevantMetrics RelevantMetricsMap, relevantLabels RelevantLabelsMap, relevantHistory map[string]interface{}) ([]string, error)
 }
