@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/prashantgupta17/nlpromql/openai"
+	"github.com/prashantgupta17/nlpromql/llm" // Added llm import
 	"github.com/prashantgupta17/nlpromql/prometheus"
 )
 
@@ -19,7 +19,7 @@ type InfoStructure struct {
 	LabelValueMap   *LabelValueMap
 	NlpToMetricMap  *NlpToMetricMap
 	QueryEngine     QueryEngine
-	OpenAIClient    *openai.OpenAIClient
+	llmClient       llm.LLMClient // This was already changed, ensure it's correct
 	InfoLoaderSaver InfoLoaderSaver
 
 	buildStatus     BuildStatus

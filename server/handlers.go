@@ -21,7 +21,7 @@ func (s *PromQLServer) handlePromQLQuery(w http.ResponseWriter, r *http.Request)
 
 	// 2. Process User Query
 	_, relevantMetrics, relevantLabels, relevantHistory, err := query_processing.ProcessUserQuery(
-		s.openaiClient, userQuery, s.metricMap, s.labelMap,
+		s.llmClient, userQuery, s.metricMap, s.labelMap,
 		s.metricLabelMap, s.labelValueMap, s.nlpToMetricMap,
 	)
 	if err != nil {
@@ -30,7 +30,7 @@ func (s *PromQLServer) handlePromQLQuery(w http.ResponseWriter, r *http.Request)
 	}
 
 	// 3. Generate PromQL Options
-	promqlOptions, err := s.openaiClient.GetPromQLFromLLM(userQuery, relevantMetrics, relevantLabels, relevantHistory)
+	promqlOptions, err := s.llmClient.GetPromQLFromLLM(userQuery, relevantMetrics, relevantLabels, relevantHistory)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error generating PromQL: %v", err), http.StatusInternalServerError)
 		return

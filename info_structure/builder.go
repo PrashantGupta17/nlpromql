@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/prashantgupta17/nlpromql/openai"
+	"github.com/prashantgupta17/nlpromql/llm"
 )
 
 // NewInfoBuilder creates a new InfoBuilder struct.
-func NewInfoBuilder(queryEngine QueryEngine, openaiClient *openai.OpenAIClient,
+func NewInfoBuilder(queryEngine QueryEngine, llmClient llm.LLMClient,
 	loaderSaver InfoLoaderSaver) (*InfoStructure, error) {
 	if loaderSaver == nil {
 		defaultLoaderSaver, err := getDefaultInfoLoaderSaver()
@@ -23,7 +23,7 @@ func NewInfoBuilder(queryEngine QueryEngine, openaiClient *openai.OpenAIClient,
 	}
 	return &InfoStructure{
 		QueryEngine:     queryEngine,
-		OpenAIClient:    openaiClient,
+		llmClient:       llmClient,
 		InfoLoaderSaver: loaderSaver,
 	}, nil
 }
@@ -96,7 +96,7 @@ func (is *InfoStructure) BuildInformationStructure() error {
 
 	// Update metricMap and get new metric synonyms
 	is.updateProgressStage("Updating existing metric map")
-	err = is.updateMetricMap(allMetricNames, allMetricDescriptions)
+	err = is.UpdateMetricMap(allMetricNames, allMetricDescriptions)
 	if err != nil {
 		is.updateErrorStatus(err)
 		return fmt.Errorf("error updating metric map: %v", err)
@@ -112,7 +112,7 @@ func (is *InfoStructure) BuildInformationStructure() error {
 
 	// Update labelMap and get new label synonyms
 	is.updateProgressStage("Fetching existing label map")
-	err = is.updateLabelMap(allLabelNames)
+	err = is.UpdateLabelMap(allLabelNames)
 	if err != nil {
 		is.updateErrorStatus(err)
 		return fmt.Errorf("error updating label map: %v", err)
@@ -165,10 +165,12 @@ func (is *InfoStructure) IsBuilding() bool {
 	return is.buildStatus.IsRunning
 }
 
-// updateMetricMap updates the metricMap with new metric names and their synonyms.
-func (is *InfoStructure) updateMetricMap(allMetricNames []string,
+// UpdateMetricMap updates the metricMap with new metric names and their synonyms.
+// Exported for testing purposes.
+func (is *InfoStructure) UpdateMetricMap(allMetricNames []string,
 	allMetricDescriptions map[string]string) error {
 	newMetricNames := make([]string, 0) // Using a slice for newMetricNames
+	// Determine new metric names that are not already in the MetricMap
 	for _, metric := range allMetricNames {
 		found := false
 		for existingMetric, _ := range is.MetricMap.AllNames {
@@ -181,18 +183,43 @@ func (is *InfoStructure) updateMetricMap(allMetricNames []string,
 			newMetricNames = append(newMetricNames, metric)
 		}
 	}
-	newMetricMap := make(map[string]string)
-	for _, metric := range newMetricNames {
-		if desc, exists := allMetricDescriptions[metric]; exists {
-			newMetricMap[metric] = desc
+
+	if len(newMetricNames) == 0 {
+		return nil // No new metrics to process
+	}
+
+	// Prepare map of new metrics to their descriptions
+	metricsToQueryForSynonyms := make(map[string]string)
+	for _, metricName := range newMetricNames {
+		if desc, exists := allMetricDescriptions[metricName]; exists {
+			metricsToQueryForSynonyms[metricName] = desc
 		} else {
-			newMetricMap[metric] = ""
+			metricsToQueryForSynonyms[metricName] = "" // Use empty string if no description
 		}
 	}
-	fmt.Printf("%d", len(newMetricNames))
-	// Get metric synonyms (only for new metrics)
-	if len(newMetricNames) > 0 {
-		newMetricSynonyms, err := is.OpenAIClient.GetMetricSynonyms(newMetricMap)
+	fmt.Printf("Found %d new metrics to get synonyms for\n", len(metricsToQueryForSynonyms))
+
+	// Batch preparation for GetMetricSynonyms
+	const metricBatchSize = 10
+	metricBatches := []map[string]string{}
+	currentBatch := make(map[string]string)
+
+	// Iterate over the slice newMetricNames for deterministic order for batching
+	for _, metricName := range newMetricNames {
+		description := metricsToQueryForSynonyms[metricName] // Get description from the pre-filtered map
+		currentBatch[metricName] = description
+
+		if len(currentBatch) >= metricBatchSize {
+			metricBatches = append(metricBatches, currentBatch)
+			currentBatch = make(map[string]string) // New map for next batch
+		}
+	}
+	if len(currentBatch) > 0 { // If there's anything left in currentBatch
+		metricBatches = append(metricBatches, currentBatch)
+	}
+
+	if len(metricBatches) > 0 {
+		newMetricSynonyms, err := is.llmClient.GetMetricSynonyms(metricBatches)
 		if err != nil {
 			return fmt.Errorf("error getting metric synonyms: %w", err)
 		}
@@ -216,12 +243,14 @@ func (is *InfoStructure) updateMetricMap(allMetricNames []string,
 	return nil
 }
 
-// updateLabelMap updates the labelMap with new label names and their synonyms.
-func (is *InfoStructure) updateLabelMap(allLabelNames []string) error {
-	newLabelNames := make([]string, 0)    // Using a slice for newLabelNames
-	for _, label := range allLabelNames { // Assuming you have getLabels() function in prometheus package
+// UpdateLabelMap updates the labelMap with new label names and their synonyms.
+// Exported for testing purposes.
+func (is *InfoStructure) UpdateLabelMap(allLabelNames []string) error {
+	newLabelNames := make([]string, 0) // Using a slice for newLabelNames
+	// Determine new label names that are not already in the LabelMap
+	for _, label := range allLabelNames {
 		found := false
-		for existingLabel, _ := range is.LabelMap.AllNames {
+		for existingLabel := range is.LabelMap.AllNames {
 			if existingLabel == label {
 				found = true
 				break
@@ -232,9 +261,29 @@ func (is *InfoStructure) updateLabelMap(allLabelNames []string) error {
 		}
 	}
 
-	// Get label synonyms (only for new labels)
-	if len(newLabelNames) > 0 {
-		newLabelSynonyms, err := is.OpenAIClient.GetLabelSynonyms(newLabelNames)
+	if len(newLabelNames) == 0 {
+		return nil // No new labels to process
+	}
+	fmt.Printf("Found %d new labels to get synonyms for\n", len(newLabelNames))
+
+	// Batch preparation for GetLabelSynonyms
+	const labelBatchSize = 10
+	labelBatches := [][]string{}
+	currentBatch := []string{}
+
+	for _, labelName := range newLabelNames {
+		currentBatch = append(currentBatch, labelName)
+		if len(currentBatch) >= labelBatchSize {
+			labelBatches = append(labelBatches, currentBatch)
+			currentBatch = []string{}
+		}
+	}
+	if len(currentBatch) > 0 {
+		labelBatches = append(labelBatches, currentBatch)
+	}
+
+	if len(labelBatches) > 0 {
+		newLabelSynonyms, err := is.llmClient.GetLabelSynonyms(labelBatches)
 		if err != nil {
 			return fmt.Errorf("error getting label synonyms: %w", err)
 		}
