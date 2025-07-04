@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings" // Added for cleanLLMResponse
 	"sync"
 
 	"github.com/prashantgupta17/nlpromql/llm"
@@ -12,6 +13,22 @@ import (
 	"github.com/tmc/langchaingo/llms"
 	// Dependencies for specific llms.Model implementations are managed in main.go
 )
+
+// cleanLLMResponse trims whitespace and removes markdown code fences (```json ... ``` or ``` ... ```)
+// from the LLM response string.
+func cleanLLMResponse(response string) string {
+	cleaned := strings.TrimSpace(response)
+	if strings.HasPrefix(cleaned, "```json") && strings.HasSuffix(cleaned, "```") {
+		cleaned = strings.TrimPrefix(cleaned, "```json")
+		cleaned = strings.TrimSuffix(cleaned, "```")
+		cleaned = strings.TrimSpace(cleaned) // Trim again after removing fences
+	} else if strings.HasPrefix(cleaned, "```") && strings.HasSuffix(cleaned, "```") {
+		cleaned = strings.TrimPrefix(cleaned, "```")
+		cleaned = strings.TrimSuffix(cleaned, "```")
+		cleaned = strings.TrimSpace(cleaned) // Trim again after removing fences
+	}
+	return cleaned
+}
 
 // LangChainClient implements the llm.LLMClient interface using LangChainGo.
 type LangChainClient struct {
@@ -58,9 +75,9 @@ func (c *LangChainClient) GetMetricSynonyms(metricBatches []map[string]string) (
 				resultsChan <- result{nil, fmt.Errorf("LangChain LLM call failed: %w", err)}
 				return
 			}
-
+			cleanedResponse := cleanLLMResponse(response)
 			var synonymsBatch map[string][]string
-			if err := json.Unmarshal([]byte(response), &synonymsBatch); err != nil {
+			if err := json.Unmarshal([]byte(cleanedResponse), &synonymsBatch); err != nil {
 				resultsChan <- result{nil, fmt.Errorf("error unmarshalling LLM response: %w. Raw response: %s", err, response)}
 				return
 			}
@@ -131,9 +148,9 @@ func (c *LangChainClient) GetLabelSynonyms(labelBatches [][]string) (map[string]
 				resultsChan <- result{nil, fmt.Errorf("LangChain LLM call failed: %w", err)}
 				return
 			}
-
+			cleanedResponse := cleanLLMResponse(response)
 			var synonymsBatch map[string][]string
-			if err := json.Unmarshal([]byte(response), &synonymsBatch); err != nil {
+			if err := json.Unmarshal([]byte(cleanedResponse), &synonymsBatch); err != nil {
 				resultsChan <- result{nil, fmt.Errorf("error unmarshalling LLM response: %w. Raw response: %s", err, response)}
 				return
 			}
@@ -182,9 +199,9 @@ func (c *LangChainClient) ProcessUserQuery(userQuery string) (map[string]interfa
 	if err != nil {
 		return nil, fmt.Errorf("LangChain LLM call failed: %w", err)
 	}
-
+	cleanedResponse := cleanLLMResponse(response)
 	var result map[string]interface{}
-	if err := json.Unmarshal([]byte(response), &result); err != nil {
+	if err := json.Unmarshal([]byte(cleanedResponse), &result); err != nil {
 		return nil, fmt.Errorf("error unmarshalling LLM response: %w. Raw response: %s", err, response)
 	}
 
@@ -260,6 +277,7 @@ func (c *LangChainClient) GetPromQLFromLLM(userQuery string, relevantMetrics llm
 	}
 
 	response := contentResponse.Choices[0].Content
+	cleanedResponse := cleanLLMResponse(response)
 
 	var promqlOptions []struct {
 		PromQL string  `json:"promql"`
@@ -267,7 +285,7 @@ func (c *LangChainClient) GetPromQLFromLLM(userQuery string, relevantMetrics llm
 		// metric_label_pairs is ignored for now as we only need PromQL strings
 	}
 
-	if err := json.Unmarshal([]byte(response), &promqlOptions); err != nil {
+	if err := json.Unmarshal([]byte(cleanedResponse), &promqlOptions); err != nil {
 		return nil, fmt.Errorf("error unmarshalling LLM response for PromQL: %w. Raw response: %s", err, response)
 	}
 

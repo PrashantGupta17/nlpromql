@@ -1,4 +1,4 @@
-package langchain_test
+package langchain // Changed to access unexported functions
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"strings" // Added for strings.Contains
 	"fmt"     // Added for fmt.Sprintf in ProcessUserQuery test
 
-	"github.com/prashantgupta17/nlpromql/langchain" // Package to be tested
+	// "github.com/prashantgupta17/nlpromql/langchain" // No longer needed as we are in the same package
 	"github.com/tmc/langchaingo/llms"
 	// "github.com/tmc/langchaingo/schema" // Removed unused import
 	"encoding/json" // Added for GetPromQLFromLLM test
@@ -86,7 +86,7 @@ func (m *mockLLM) ResetCallTracking() {
 // TestNewLangChainClient tests the constructor for LangChainClient.
 func TestNewLangChainClient(t *testing.T) {
 	mock := &mockLLM{}
-	client := langchain.NewLangChainClient(mock)
+	client := NewLangChainClient(mock) // Changed langchain.NewLangChainClient to NewLangChainClient
 	if client == nil {
 		t.Error("NewLangChainClient returned nil")
 	}
@@ -94,7 +94,7 @@ func TestNewLangChainClient(t *testing.T) {
 
 func TestLangChainClient_ProcessUserQuery(t *testing.T) {
 	mock := &mockLLM{}
-	client := langchain.NewLangChainClient(mock)
+	client := NewLangChainClient(mock) // Changed langchain.NewLangChainClient to NewLangChainClient
 
 	tests := []struct {
 		name          string
@@ -182,7 +182,7 @@ func TestLangChainClient_ProcessUserQuery(t *testing.T) {
 
 func TestLangChainClient_GetLabelSynonyms_Batching(t *testing.T) {
 	mock := &mockLLM{}
-	client := langchain.NewLangChainClient(mock)
+	client := NewLangChainClient(mock) // Changed langchain.NewLangChainClient to NewLangChainClient
 
 	// Helper to create expected prompt string
 	makePrompt := func(data interface{}) string {
@@ -311,7 +311,7 @@ func TestLangChainClient_GetLabelSynonyms_Batching(t *testing.T) {
 
 func TestLangChainClient_GetPromQLFromLLM(t *testing.T) {
 	mock := &mockLLM{}
-	client := langchain.NewLangChainClient(mock)
+	client := NewLangChainClient(mock) // Changed langchain.NewLangChainClient to NewLangChainClient
 
 	sampleQuery := "show cpu usage"
 	sampleMetrics := llm.RelevantMetricsMap{
@@ -466,7 +466,7 @@ func TestLangChainClient_GetPromQLFromLLM(t *testing.T) {
 
 func TestLangChainClient_GetMetricSynonyms_Batching(t *testing.T) {
 	mock := &mockLLM{}
-	client := langchain.NewLangChainClient(mock)
+	client := NewLangChainClient(mock) // Changed langchain.NewLangChainClient to NewLangChainClient
 
 	// Helper to create expected prompt string
 	makePrompt := func(data interface{}) string {
@@ -589,6 +589,74 @@ func TestLangChainClient_GetMetricSynonyms_Batching(t *testing.T) {
 				}
 			}
 			mock.mu.Unlock()
+		})
+	}
+}
+
+func TestCleanLLMResponse(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Valid JSON",
+			input:    `{"key": "value"}`,
+			expected: `{"key": "value"}`,
+		},
+		{
+			name:     "JSON with ```json fences",
+			input:    "```json\n{\"key\": \"value\"}\n```",
+			expected: `{"key": "value"}`,
+		},
+		{
+			name:     "JSON with ``` fences",
+			input:    "```\n{\"key\": \"value\"}\n```",
+			expected: `{"key": "value"}`,
+		},
+		{
+			name:     "JSON with leading/trailing whitespace",
+			input:    "  {\"key\": \"value\"}  ",
+			expected: `{"key": "value"}`,
+		},
+		{
+			name:     "JSON with fences and whitespace",
+			input:    "  ```json\n  {\"key\": \"value\"}  \n```  ",
+			expected: `{"key": "value"}`,
+		},
+		{
+			name:     "Empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "String with only fences",
+			input:    "```json\n```",
+			expected: "",
+		},
+		{
+			name:     "String with only backticks",
+			input:    "```\n```",
+			expected: "",
+		},
+		{
+			name:     "String that is not JSON but has no fences",
+			input:    "this is not json",
+			expected: "this is not json",
+		},
+		{
+			name:     "JSON with internal backticks (should not be touched if not fences)",
+			input:    `{"key": "value with \` + "`backticks`" + `"}`,
+			expected: `{"key": "value with \` + "`backticks`" + `"}`,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			actual := cleanLLMResponse(tc.input)
+			if actual != tc.expected {
+				t.Errorf("cleanLLMResponse(%q) = %q; want %q", tc.input, actual, tc.expected)
+			}
 		})
 	}
 }

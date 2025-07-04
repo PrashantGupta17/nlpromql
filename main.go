@@ -60,7 +60,14 @@ func main() {
 			os.Exit(1)
 		}
 		modelID := strings.TrimPrefix(modelName, "openai/")
-		lcModel, err = lcOpenai.New(lcOpenai.WithToken(finalOpenAIAPIKey), lcOpenai.WithModel(modelID))
+		// Assuming lcOpenai.ResponseFormat is the correct type based on the error.
+		// If not, this will fail and we'll know lcOpenai doesn't export this type directly.
+		responseFormatObj := &lcOpenai.ResponseFormat{Type: "json_object"}
+		lcModel, err = lcOpenai.New(
+			lcOpenai.WithToken(finalOpenAIAPIKey),
+			lcOpenai.WithModel(modelID),
+			lcOpenai.WithResponseFormat(responseFormatObj),
+		)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error initializing Langchain OpenAI model (%s): %v\n", modelID, err)
 			os.Exit(1)
