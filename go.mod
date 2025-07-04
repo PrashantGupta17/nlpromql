@@ -4,7 +4,10 @@ go 1.22.0
 
 toolchain go1.22.2
 
-require github.com/tmc/langchaingo v0.1.13
+require (
+	github.com/tmc/langchaingo v0.1.13
+	go.starlark.net/starlark v0.0.0-20231121155337-90ade8b89d89 // Example version, Go will update this
+)
 
 require (
 	github.com/dlclark/regexp2 v1.10.0 // indirect
