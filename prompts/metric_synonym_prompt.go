@@ -1,7 +1,7 @@
 package prompts
 
 var MetricSynonymPrompt = `
-Given a JSON object containing Prometheus metric names and their descriptions, generate semantically related single-word synonyms or variations for each metric that could be used in a monitoring and Prometheus context. 
+Given a JSON object containing Prometheus metric names and their descriptions, generate semantically related single-word synonyms or variations for each metric that could be used in a monitoring and Prometheus context.
 
 Instructions:
 
@@ -13,17 +13,17 @@ Instructions:
 6. **Variety:** Aim for a variety of synonyms to capture the full range of potential meanings and interpretations.
 7. **Number of Synonyms:** Generate a minimum of 5 and a maximum of 10 synonyms for each metric, depending on the complexity and potential for ambiguity. Do not repeat synonyms.
 8. **Description Consideration:** Prioritize the metric description (if provided) for semantic relevance. If the description is empty, ignore it.
-9. **Output Consideration:** Output should always be in valid json format.
+9. **Output Format:** You MUST return ONLY a valid JSON object with the following structure. Do NOT use markdown, do NOT call a function, do NOT include any text or explanation. Only output the JSON object as shown below.
+
+{
+  "synonyms": {
+    "original_metric1": ["synonym1", "synonym2", ..., "synonym10"],
+    "original_metric2": ["synonym1", "synonym2", ..., "synonym5"],
+    "original_metric3": ["synonym1", "synonym2", ..., "synonym8"]
+  }
+}
 
 Metric Data:
 
 %s
-
-Output the results in JSON format:
-
-{{
-  "original_metric1": ["synonym1", "synonym2", ..., "synonym10"],
-  "original_metric2": ["synonym1", "synonym2", ..., "synonym5"],
-  "original_metric3": ["synonym1", "synonym2", ..., "synonym8"]
-}}
 `
