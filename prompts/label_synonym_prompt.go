@@ -1,7 +1,7 @@
 package prompts
 
 var LabelSynonymPrompt = `
-Given a JSON array containing Prometheus label names, generate semantically related single-word synonyms or variations for each label that could be used in a monitoring and Prometheus context. 
+Given a JSON array containing Prometheus label names, generate semantically related single-word synonyms or variations for each label that could be used in a monitoring and Prometheus context.
 
 Instructions:
 
@@ -12,17 +12,17 @@ Instructions:
 5. **Prometheus Conventions:** Follow standard Prometheus naming conventions and best practices.
 6. **Variety:** Aim for a variety of synonyms to capture the full range of potential meanings and interpretations.
 7. **Number of Synonyms:** Generate a minimum of 5 and a maximum of 10 synonyms for each label, depending on the complexity and potential for ambiguity.
-8. **Output Consideration:** Output should always be in valid json format.
-
-Metric Data:
-
-%s
-
-Output the results in JSON format:
+8. **Output Format:** You MUST return ONLY a valid JSON object with the following structure. Do NOT use markdown, do NOT call a function, do NOT include any text or explanation. Only output the JSON object as shown below.
 
 {
-  "original_label1": ["synonym1", "synonym2", ..., "synonym10"],
-  "original_label2": ["synonym1", "synonym2", ..., "synonym5"],
-  "original_label3": ["synonym1", "synonym2", ..., "synonym8"]
+  "synonyms": {
+    "original_label1": ["synonym1", "synonym2", ..., "synonym10"],
+    "original_label2": ["synonym1", "synonym2", ..., "synonym5"],
+    "original_label3": ["synonym1", "synonym2", ..., "synonym8"]
+  }
 }
+
+Label Data:
+
+%s
 `

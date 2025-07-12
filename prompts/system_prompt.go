@@ -41,7 +41,7 @@ You will receive an input which will contain 4 main parts:
    These promql queries that you think of, must always adhere to valid combinations provided to you in Relevant Metrics and Relevant Labels json.
    Only if the provided jsons are all empty, meaning there are no relevant valid combinations, then no valid promql can be thought of and result should be empty.
    Also, prioritize metrics in Relevant History, ranking them by their scores.
-4. Generate a JSON array of possible PromQL queries, analyzed in Step 3, in the following format:
+4. Output Format: You MUST return ONLY a valid JSON array of objects with the following structure. Do NOT use markdown, do NOT call a function, do NOT include any text or explanation. Only output the JSON array as shown below.
 
 [
     {
@@ -49,92 +49,6 @@ You will receive an input which will contain 4 main parts:
         "score": score1,
         "metric_label_pairs": {"metric1": {"label1": "value1", ...}, ...}
     },
-    {
-        "promql": "query2",
-        "score": score2,
-        "metric_label_pairs": {"metric2": {"label2": "value2", ...}, ...}
-    },
     ...
-]
-where:
-
-query1, query2, etc. are the PromQL queries.
-score1, score2, etc. are relevance scores based on the input data and user intent. Use the scores in relevant_history as the primary ranking factor.
-metric_label_pairs is a json containing the metric names used in the potential query as keys, and their corresponding label-value pairs as values. If a query does not use a metric, this field should be an empty json {}.
-
-5. Always generate a valid JSON Array and your output should always just be the result JSON array from Step 4 and nothing else.
-
-Example Input1:
-
-# Relevant Metrics
-{
-  "node_cpu_seconds_total": {
-    "mode": {
-      "MatchScore": 0.8,
-      "Values": ["idle", "system", "user"]
-    }
-  },
-  "process_cpu_seconds_total": {
-    "mode": {
-      "MatchScore": 0.7,
-      "Values": ["idle", "system", "user"]
-    }
-  }
-}
-
-# Relevant Labels
-{
-  "mode": {
-    "MatchScore": 0.9,
-    "Values": ["idle", "system", "user"]
-  },
-  "instance": {
-    "MatchScore": 0.6,
-    "Values": ["server1", "server2"]
-  }
-}
-
-# Relevant History
-{
-  "node_cpu_seconds_total": {"score": 3, "labels": {"mode": "idle"}}
-}
-
-# User Query
-show me cpu usage
-
-Example Output1:
-
-JSON
-[
-    {"promql": "100 - (avg by (instance) (irate(node_cpu_seconds_total{mode='idle'}[5m])) * 100)", "score": 4, "metric_label_pairs": {"node_cpu_seconds_total": {"mode": "idle"}}},
-    {"promql": "sum by (instance) (irate(node_cpu_seconds_total{mode!='idle'}[5m]))", "score": 3, "metric_label_pairs": {"node_cpu_seconds_total": {"mode": ["system","user"]}}},
-    {"promql": "100 - (avg by (instance) (irate(process_cpu_seconds_total{mode='idle'}[5m])) * 100)", "score": 1, "metric_label_pairs": {"process_cpu_seconds_total": {"mode": "idle"}}},
-    {"promql": "sum by (instance) (irate(process_cpu_seconds_total{mode!='idle'}[5m]))", "score": 1, "metric_label_pairs": {"process_cpu_seconds_total": {"mode": ["system","user"]}}}
-]
-
-Example Input2:
-
-# Relevant Metrics
-{}
-
-# Relevant Labels
-{
-  "env": {
-    "MatchScore": 1.0,
-    "Values": ["production", "staging", "development"]
-  }
-}
-
-# Relevant History
-{}
-
-# User Query
-nodes in production environment
-
-Example Ouput2:
-
-JSON
-[
-    {"promql": "kube_node_info{env='production'}", "score": 1, "metric_label_pairs": {}}
 ]
 `
